@@ -1,0 +1,38 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Profiling
+*.prof
+
+# Output of go coverage
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dependency directories
+vendor/
+
+# Profiling output
+profiles/
+
+# Python
+__pycache__/
+
+# Debug
+__debug_bin*

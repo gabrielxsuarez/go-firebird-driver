@@ -1,0 +1,44 @@
+services:
+  firebird3:
+    image: firebirdsql/firebird:3
+    container_name: go-firebird-driver-fb3
+    restart: unless-stopped
+    ports:
+      - "3063:3050"
+    environment:
+      FIREBIRD_ROOT_PASSWORD: masterkey
+      FIREBIRD_DATABASE: driver.fdb
+      FIREBIRD_DATABASE_DEFAULT_CHARSET: UTF8
+    volumes:
+      - fb3-data:/var/lib/firebird/data
+
+  firebird4:
+    image: firebirdsql/firebird:4
+    container_name: go-firebird-driver-fb4
+    restart: unless-stopped
+    ports:
+      - "3064:3050"
+    environment:
+      FIREBIRD_ROOT_PASSWORD: masterkey
+      FIREBIRD_DATABASE: driver.fdb
+      FIREBIRD_DATABASE_DEFAULT_CHARSET: UTF8
+    volumes:
+      - fb4-data:/var/lib/firebird/data
+
+  firebird5:
+    image: firebirdsql/firebird:5
+    container_name: go-firebird-driver-fb5
+    restart: unless-stopped
+    ports:
+      - "3065:3050"
+    environment:
+      FIREBIRD_ROOT_PASSWORD: masterkey
+      FIREBIRD_DATABASE: driver.fdb
+      FIREBIRD_DATABASE_DEFAULT_CHARSET: UTF8
+    volumes:
+      - fb5-data:/var/lib/firebird/data
+
+volumes:
+  fb3-data:
+  fb4-data:
+  fb5-data:

@@ -1,0 +1,38 @@
+linters:
+  enable:
+    - errcheck
+    - gocritic
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - prealloc
+    - unconvert
+    - misspell
+    - nilerr
+
+linters-settings:
+  errcheck:
+    check-type-assertions: false
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+    disabled-checks:
+      - ifElseChain
+      - hugeParam
+  prealloc:
+    simple: true
+    for-loops: true
+
+issues:
+  exclude-dirs:
+    - internal/bignum
+    - internal/charset
+    - internal/timezone
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
+        - prealloc
