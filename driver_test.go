@@ -53,6 +53,27 @@ func openTestDB(t *testing.T) *sql.DB {
 
 // --- Connection Tests ---
 
+func TestDriverAliasesRegistered(t *testing.T) {
+	for _, name := range []string{"firebird", "firebirdsql"} {
+		found := false
+		for _, registered := range sql.Drivers() {
+			if registered == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("driver %q not registered", name)
+		}
+
+		db, err := sql.Open(name, testDSN)
+		if err != nil {
+			t.Fatalf("sql.Open(%q): %v", name, err)
+		}
+		db.Close()
+	}
+}
+
 func TestConnect(t *testing.T) {
 	db := openTestDB(t)
 	if err := db.Ping(); err != nil {

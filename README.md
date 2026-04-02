@@ -10,6 +10,12 @@ It supports Firebird 3.0, 4.0, and 5.0 through a native wire protocol implementa
 go get github.com/gabrielxsuarez/go-firebird-driver
 ```
 
+## Migration from `nakagami/firebirdsql`
+
+For easier migrations, this package registers both `firebird` and `firebirdsql`.
+
+Use `firebird` in new code. The `firebirdsql` name is kept as a compatibility alias so existing `sql.Open("firebirdsql", ...)` calls do not need to change when switching imports.
+
 ## Quick Start
 
 ```go
@@ -93,6 +99,7 @@ Compression is not ruled out for the future, but it was not a priority for the f
 - pure Go, no CGO
 - native wire protocol implementation
 - compatible with `database/sql`
+- registers both `firebird` and `firebirdsql`
 - support for Firebird 3, 4, and 5
 - optimized to reduce allocations in hot paths
 - ready to evolve with newer protocol versions

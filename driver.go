@@ -2,7 +2,8 @@
 //
 // The driver communicates using the Firebird wire protocol (v13-v18)
 // and is designed for aggressive memory efficiency with zero allocations
-// in hot paths.
+// in hot paths. It registers itself under both "firebird" (recommended)
+// and "firebirdsql" (compatibility alias for nakagami/firebirdsql users).
 //
 // Usage:
 //
@@ -21,7 +22,18 @@ import (
 )
 
 func init() {
-	sql.Register("firebird", &Driver{})
+	drv := &Driver{}
+	registerDriver("firebird", drv)
+	registerDriver("firebirdsql", drv)
+}
+
+func registerDriver(name string, drv driver.Driver) {
+	for _, registered := range sql.Drivers() {
+		if registered == name {
+			return
+		}
+	}
+	sql.Register(name, drv)
 }
 
 // Driver implements driver.Driver and driver.DriverContext.
