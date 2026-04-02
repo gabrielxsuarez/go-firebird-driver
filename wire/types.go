@@ -306,7 +306,7 @@ func EncodeParamsOptimal(sw *StackWriter, descs []ColumnDescriptor, values []dri
 // Used to decide if stack-allocated buffer can be used.
 func EstimateParamSize(descs []ColumnDescriptor, values []driver.NamedValue) int {
 	// Null bitset size (padded to 4 bytes)
-	size := ((len(descs) + 7) / 8 + 3) & ^3
+	size := ((len(descs)+7)/8 + 3) & ^3
 
 	for i, desc := range descs {
 		if i >= len(values) || values[i].Value == nil {
@@ -518,15 +518,15 @@ func estimateValueSize(desc *ColumnDescriptor, value any) int {
 	case SQLDec34, SQLInt128:
 		return 16
 	case SQLText:
-		return int(desc.Length) + ((4-int(desc.Length))&3) // padded
+		return int(desc.Length) + ((4 - int(desc.Length)) & 3) // padded
 	case SQLVarying:
 		switch v := value.(type) {
 		case string:
-			return 4 + len(v) + ((4-len(v))&3) // length prefix + data + padding
+			return 4 + len(v) + ((4 - len(v)) & 3) // length prefix + data + padding
 		case []byte:
-			return 4 + len(v) + ((4-len(v))&3)
+			return 4 + len(v) + ((4 - len(v)) & 3)
 		default:
-			return 4 + 32 + ((4-32)&3) // conservative estimate for non-string types
+			return 4 + 32 + ((4 - 32) & 3) // conservative estimate for non-string types
 		}
 	case SQLBoolean:
 		return 4

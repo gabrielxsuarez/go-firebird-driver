@@ -115,12 +115,12 @@ func Connect(cfg *ProtocolConfig) (*WireConnection, error) {
 	// Write op_connect
 	protocols := supportedProtocols()
 	w.WriteInt32(opConnect)
-	w.WriteInt32(0)                   // p_cnct_operation
-	w.WriteUInt32(ConnectVersion3)    // p_cnct_cversion
-	w.WriteUInt32(ArchGeneric)        // p_cnct_client
-	w.WriteString(cfg.Database)       // p_cnct_file
+	w.WriteInt32(0)                     // p_cnct_operation
+	w.WriteUInt32(ConnectVersion3)      // p_cnct_cversion
+	w.WriteUInt32(ArchGeneric)          // p_cnct_client
+	w.WriteString(cfg.Database)         // p_cnct_file
 	w.WriteInt32(int32(len(protocols))) // p_cnct_count
-	w.WriteBuffer(userIdent)          // p_cnct_user_id
+	w.WriteBuffer(userIdent)            // p_cnct_user_id
 
 	// Protocol descriptors
 	for _, p := range protocols {
@@ -323,7 +323,7 @@ func Connect(cfg *ProtocolConfig) (*WireConnection, error) {
 	w.WriteInt32(opAttach)
 	w.WriteInt32(0)             // p_atch_database
 	w.WriteString(cfg.Database) // p_atch_file
-	w.WriteBuffer(dpb)         // p_atch_dpb
+	w.WriteBuffer(dpb)          // p_atch_dpb
 
 	if err := w.Flush(conn); err != nil {
 		conn.Close()

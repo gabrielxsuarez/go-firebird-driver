@@ -198,7 +198,7 @@ func TestParseServerAuthDataInvalidHex(t *testing.T) {
 	// Valid structure but garbage hex for B
 	data := make([]byte, 0, 40)
 	data = append(data, 2, 0, 0xAB, 0xCD, 4, 0) // salt: 2 bytes + key len: 4
-	data = append(data, "ZZZZ"...)         // invalid hex
+	data = append(data, "ZZZZ"...)              // invalid hex
 	_, _, err := parseServerAuthData(data)
 	if err == nil {
 		t.Fatal("expected error for invalid hex")

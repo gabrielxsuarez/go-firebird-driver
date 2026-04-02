@@ -631,7 +631,7 @@ func (wc *WireConnection) FetchRowsReuse(
 	} else {
 		rowCapacity = cap(valuesBuf) / numCols
 		if rowCapacity >= initialRows {
-			allValues = valuesBuf[:initialRows*numCols:cap(valuesBuf)]
+			allValues = valuesBuf[: initialRows*numCols : cap(valuesBuf)]
 		} else {
 			rowCapacity = initialRows
 			allValues = make([]any, rowCapacity*numCols)

@@ -70,7 +70,7 @@ func TestTimeToTicks(t *testing.T) {
 	}{
 		{"midnight", time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), 0},
 		{"noon", time.Date(0, 1, 1, 12, 0, 0, 0, time.UTC), 12 * 3600 * 10000},
-		{"13:30:45", time.Date(0, 1, 1, 13, 30, 45, 0, time.UTC), (13*3600+30*60+45)*10000},
+		{"13:30:45", time.Date(0, 1, 1, 13, 30, 45, 0, time.UTC), (13*3600 + 30*60 + 45) * 10000},
 		{"with microseconds", time.Date(0, 1, 1, 0, 0, 1, 500000000, time.UTC), 1*10000 + 5000},
 	}
 	for _, tt := range tests {
@@ -85,7 +85,7 @@ func TestTimeToTicks(t *testing.T) {
 
 func TestTicksToTime(t *testing.T) {
 	tests := []struct {
-		ticks uint32
+		ticks   uint32
 		h, m, s int
 	}{
 		{0, 0, 0, 0},

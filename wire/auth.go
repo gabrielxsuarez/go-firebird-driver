@@ -235,14 +235,14 @@ func buildUserIdentBlock(osUser, hostname, dbUser, pluginName string, publicKeyH
 	// Each tag entry: 1 (tag) + 1 (len) + len(value)
 	// CNCT_specific_data may be multi-part.
 	size := 0
-	size += 2 + len(osUser)        // CNCT_user
-	size += 2 + len(hostname)      // CNCT_host
-	size += 2                      // CNCT_user_verification (empty)
-	size += 2 + len(dbUser)        // CNCT_login
-	size += 2 + len(pluginName)    // CNCT_plugin_name
+	size += 2 + len(osUser)                // CNCT_user
+	size += 2 + len(hostname)              // CNCT_host
+	size += 2                              // CNCT_user_verification (empty)
+	size += 2 + len(dbUser)                // CNCT_login
+	size += 2 + len(pluginName)            // CNCT_plugin_name
 	size += specificDataSize(publicKeyHex) // CNCT_specific_data (multi-part)
-	size += 2 + len(pluginList)    // CNCT_plugin_list
-	size += 2 + 4                  // CNCT_client_crypt (4-byte value)
+	size += 2 + len(pluginList)            // CNCT_plugin_list
+	size += 2 + 4                          // CNCT_client_crypt (4-byte value)
 
 	buf := make([]byte, 0, size)
 

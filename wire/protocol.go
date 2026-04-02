@@ -99,10 +99,10 @@ const (
 	opAuxConnect     int32 = 54
 
 	// Responses and utilities
-	opResponse            int32 = 9
-	opDummy               int32 = 71
-	opExit                int32 = 2
-	opAbortAuxConnection  int32 = 95
+	opResponse           int32 = 9
+	opDummy              int32 = 71
+	opExit               int32 = 2
+	opAbortAuxConnection int32 = 95
 )
 
 // --- Protocol versions ---
@@ -277,29 +277,29 @@ const (
 // --- BLR type codes ---
 
 const (
-	BlrShort          byte = 7
-	BlrLong           byte = 8
-	BlrQuad           byte = 9
-	BlrFloat          byte = 10
-	BlrDFloat         byte = 11
-	BlrSQLDate        byte = 12
-	BlrSQLTime        byte = 13
-	BlrText           byte = 14
-	BlrText2          byte = 15
-	BlrInt64          byte = 16
-	BlrBlob2          byte = 17
-	BlrBool           byte = 23
-	BlrDec64          byte = 24
-	BlrDec128         byte = 25
-	BlrInt128         byte = 26
-	BlrDouble         byte = 27
-	BlrSQLTimeTZ      byte = 28
-	BlrTimestampTZ    byte = 29
-	BlrExTimeTZ       byte = 30
-	BlrExTimestampTZ  byte = 31
-	BlrTimestamp      byte = 35
-	BlrVarying        byte = 37
-	BlrVarying2       byte = 38
+	BlrShort         byte = 7
+	BlrLong          byte = 8
+	BlrQuad          byte = 9
+	BlrFloat         byte = 10
+	BlrDFloat        byte = 11
+	BlrSQLDate       byte = 12
+	BlrSQLTime       byte = 13
+	BlrText          byte = 14
+	BlrText2         byte = 15
+	BlrInt64         byte = 16
+	BlrBlob2         byte = 17
+	BlrBool          byte = 23
+	BlrDec64         byte = 24
+	BlrDec128        byte = 25
+	BlrInt128        byte = 26
+	BlrDouble        byte = 27
+	BlrSQLTimeTZ     byte = 28
+	BlrTimestampTZ   byte = 29
+	BlrExTimeTZ      byte = 30
+	BlrExTimestampTZ byte = 31
+	BlrTimestamp     byte = 35
+	BlrVarying       byte = 37
+	BlrVarying2      byte = 38
 )
 
 // --- BLR structural tokens ---

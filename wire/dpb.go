@@ -2,38 +2,38 @@ package wire
 
 // DPB tag constants.
 const (
-	IscDpbPageSize          byte = 4
-	IscDpbNoGarbageCollect  byte = 16
-	IscDpbSysUserName       byte = 19
-	IscDpbForceWrite        byte = 24
-	IscDpbUserName          byte = 28
-	IscDpbPassword          byte = 29
-	IscDpbPasswordEnc       byte = 30
-	IscDpbLcCtype           byte = 48
-	IscDpbConnectTimeout    byte = 57
-	IscDpbDummyPktInterval  byte = 58
-	IscDpbSQLDialect        byte = 63
-	IscDpbSetDBReadOnly     byte = 64
-	IscDpbSetDBCharset      byte = 68
-	IscDpbUtf8Filename      byte = 77
-	IscDpbAuthBlock         byte = 79
-	IscDpbClientVersion     byte = 80
-	IscDpbRemoteProtocol    byte = 81
-	IscDpbHostName          byte = 82
-	IscDpbOsUser            byte = 83
-	IscDpbSpecificAuthData  byte = 84
-	IscDpbAuthPluginList    byte = 85
-	IscDpbAuthPluginName    byte = 86
-	IscDpbConfig            byte = 87
-	IscDpbNolinger          byte = 88
-	IscDpbProcessID         byte = 89
-	IscDpbProcessName       byte = 90
-	IscDpbSessionTimeZone   byte = 91
-	IscDpbSetDBReplica      byte = 92
-	IscDpbSetBindOfRPT      byte = 93
-	IscDpbDecfloatRound     byte = 94
-	IscDpbDecfloatTraps     byte = 95
-	IscDpbParallelWorkers   byte = 100
+	IscDpbPageSize         byte = 4
+	IscDpbNoGarbageCollect byte = 16
+	IscDpbSysUserName      byte = 19
+	IscDpbForceWrite       byte = 24
+	IscDpbUserName         byte = 28
+	IscDpbPassword         byte = 29
+	IscDpbPasswordEnc      byte = 30
+	IscDpbLcCtype          byte = 48
+	IscDpbConnectTimeout   byte = 57
+	IscDpbDummyPktInterval byte = 58
+	IscDpbSQLDialect       byte = 63
+	IscDpbSetDBReadOnly    byte = 64
+	IscDpbSetDBCharset     byte = 68
+	IscDpbUtf8Filename     byte = 77
+	IscDpbAuthBlock        byte = 79
+	IscDpbClientVersion    byte = 80
+	IscDpbRemoteProtocol   byte = 81
+	IscDpbHostName         byte = 82
+	IscDpbOsUser           byte = 83
+	IscDpbSpecificAuthData byte = 84
+	IscDpbAuthPluginList   byte = 85
+	IscDpbAuthPluginName   byte = 86
+	IscDpbConfig           byte = 87
+	IscDpbNolinger         byte = 88
+	IscDpbProcessID        byte = 89
+	IscDpbProcessName      byte = 90
+	IscDpbSessionTimeZone  byte = 91
+	IscDpbSetDBReplica     byte = 92
+	IscDpbSetBindOfRPT     byte = 93
+	IscDpbDecfloatRound    byte = 94
+	IscDpbDecfloatTraps    byte = 95
+	IscDpbParallelWorkers  byte = 100
 )
 
 // DPBBuilder constructs a Database Parameter Buffer.
