@@ -48,6 +48,16 @@ func (wc *WireConnection) SetDeadline(t time.Time) {
 	_ = wc.conn.SetDeadline(t)
 }
 
+// CloseTransport closes the underlying socket without attempting protocol
+// cleanup. Use this after transport failures, where detach would only add more
+// broken writes to the same dead connection.
+func (wc *WireConnection) CloseTransport() error {
+	if wc == nil || wc.conn == nil {
+		return nil
+	}
+	return wc.conn.Close()
+}
+
 // --- Lazy send helpers ---
 
 // deferResponse increments the deferred response counter.

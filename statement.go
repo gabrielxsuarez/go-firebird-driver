@@ -36,13 +36,17 @@ func (s *stmt) Close() error {
 		return nil
 	}
 	s.closed = true
+	if s.conn.closed || s.conn.bad {
+		return nil
+	}
 
-	err := s.conn.wc.RecycleStatement(s.handle, false)
+	err := s.conn.handleFatalErrorLocked(s.conn.wc.RecycleStatement(s.handle, false))
 
 	// Commit pending auto-commit changes (like nakagami's freeStatement pattern)
 	if s.conn.dirtyAutoTx && s.conn.activeTx == 0 && s.conn.autoTx != 0 {
 		if cerr := s.conn.wc.CommitRetaining(s.conn.autoTx); cerr != nil {
 			s.conn.invalidateAutoTx()
+			cerr = s.conn.handleFatalErrorLocked(cerr)
 			if err == nil {
 				err = cerr
 			}
@@ -75,7 +79,7 @@ func (s *stmt) ExecContext(ctx context.Context, args []driver.NamedValue) (drive
 	s.conn.mu.Lock()
 	defer s.conn.mu.Unlock()
 
-	if s.closed || s.conn.closed {
+	if s.closed || s.conn.closed || s.conn.bad {
 		return nil, driver.ErrBadConn
 	}
 
@@ -100,16 +104,16 @@ func (s *stmt) ExecContext(ctx context.Context, args []driver.NamedValue) (drive
 				var err error
 				txHandle, err = s.conn.getAutoTx()
 				if err != nil {
-					return nil, err
+					return nil, s.conn.handleRetryableErrorLocked(err)
 				}
 				if err := s.conn.materializeNamedBlobs(txHandle, s.inputs, args); err != nil {
 					s.conn.invalidateAutoTx()
-					return nil, err
+					return nil, s.conn.handleFatalErrorLocked(err)
 				}
 			}
 		} else {
 			if err := s.conn.materializeNamedBlobs(txHandle, s.inputs, args); err != nil {
-				return nil, err
+				return nil, s.conn.handleFatalErrorLocked(err)
 			}
 		}
 
@@ -123,7 +127,7 @@ func (s *stmt) ExecContext(ctx context.Context, args []driver.NamedValue) (drive
 		var err error
 		txHandle, err = s.conn.getAutoTx()
 		if err != nil {
-			return nil, err
+			return nil, s.conn.handleRetryableErrorLocked(err)
 		}
 	}
 
@@ -140,7 +144,7 @@ func (s *stmt) ExecContext(ctx context.Context, args []driver.NamedValue) (drive
 		if autoCommit {
 			s.conn.invalidateAutoTx()
 		}
-		return nil, err
+		return nil, s.conn.handleFatalErrorLocked(err)
 	}
 
 	if autoCommit {
@@ -159,7 +163,7 @@ func (s *stmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driv
 	s.conn.mu.Lock()
 	defer s.conn.mu.Unlock()
 
-	if s.closed || s.conn.closed {
+	if s.closed || s.conn.closed || s.conn.bad {
 		return nil, driver.ErrBadConn
 	}
 
@@ -172,7 +176,7 @@ func (s *stmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driv
 		var err error
 		txHandle, err = s.conn.getAutoTx()
 		if err != nil {
-			return nil, err
+			return nil, s.conn.handleRetryableErrorLocked(err)
 		}
 	}
 
@@ -182,7 +186,7 @@ func (s *stmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driv
 			if autoCommit {
 				s.conn.invalidateAutoTx()
 			}
-			return nil, err
+			return nil, s.conn.handleFatalErrorLocked(err)
 		}
 		blr = s.paramBLR()
 		var sw wire.StackWriter
@@ -200,7 +204,7 @@ func (s *stmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driv
 		if autoCommit {
 			s.conn.invalidateAutoTx()
 		}
-		return nil, err
+		return nil, s.conn.handleFatalErrorLocked(err)
 	}
 
 	return &rows{

@@ -17,6 +17,7 @@ type conn struct {
 	wc        *wire.WireConnection
 	config    *Config
 	closed    bool
+	bad       bool
 	mu        sync.Mutex
 	fetchSize int
 
@@ -165,7 +166,7 @@ func (c *conn) PrepareContext(ctx context.Context, query string) (driver.Stmt, e
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.closed {
+	if c.closed || c.bad {
 		return nil, driver.ErrBadConn
 	}
 
@@ -180,7 +181,7 @@ func (c *conn) PrepareContext(ctx context.Context, query string) (driver.Stmt, e
 		var err error
 		txHandle, err = c.getAutoTx()
 		if err != nil {
-			return nil, err
+			return nil, c.handleRetryableErrorLocked(err)
 		}
 	}
 
@@ -190,7 +191,7 @@ func (c *conn) PrepareContext(ctx context.Context, query string) (driver.Stmt, e
 		if c.activeTx == 0 {
 			c.invalidateAutoTx()
 		}
-		return nil, err
+		return nil, c.handleRetryableErrorLocked(err)
 	}
 
 	// Parse descriptor info
@@ -216,6 +217,9 @@ func (c *conn) Close() error {
 		return nil
 	}
 	c.closed = true
+	if c.bad {
+		return nil
+	}
 	if c.autoTx != 0 {
 		_ = c.wc.Commit(c.autoTx)
 		c.autoTx = 0
@@ -233,7 +237,7 @@ func (c *conn) getAutoTx() (int32, error) {
 	tpb := defaultTPB()
 	txHandle, err := c.wc.Transaction(tpb)
 	if err != nil {
-		return 0, err
+		return 0, c.handleRetryableErrorLocked(err)
 	}
 	c.autoTx = txHandle
 	return txHandle, nil
@@ -255,7 +259,7 @@ func (c *conn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, e
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.closed {
+	if c.closed || c.bad {
 		return nil, driver.ErrBadConn
 	}
 
@@ -273,7 +277,7 @@ func (c *conn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, e
 
 	txHandle, err := c.wc.Transaction(tpb)
 	if err != nil {
-		return nil, err
+		return nil, c.handleRetryableErrorLocked(err)
 	}
 
 	c.activeTx = txHandle
@@ -289,7 +293,7 @@ func (c *conn) ExecContext(ctx context.Context, query string, args []driver.Name
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.closed {
+	if c.closed || c.bad {
 		return nil, driver.ErrBadConn
 	}
 
@@ -303,7 +307,7 @@ func (c *conn) ExecContext(ctx context.Context, query string, args []driver.Name
 		var err error
 		txHandle, err = c.getAutoTx()
 		if err != nil {
-			return nil, err
+			return nil, c.handleRetryableErrorLocked(err)
 		}
 	}
 
@@ -313,7 +317,7 @@ func (c *conn) ExecContext(ctx context.Context, query string, args []driver.Name
 		if autoCommit {
 			c.invalidateAutoTx()
 		}
-		return nil, err
+		return nil, c.handleRetryableErrorLocked(err)
 	}
 
 	stmtType, _, inputs := wire.ParseSQLDescribeInfo(infoData)
@@ -326,7 +330,7 @@ func (c *conn) ExecContext(ctx context.Context, query string, args []driver.Name
 				c.invalidateAutoTx()
 			}
 			_ = c.wc.FreeStatement(stmtHandle, wire.DSQLDrop)
-			return nil, err
+			return nil, c.handleFatalErrorLocked(err)
 		}
 		blr = wire.BuildParamBLR(inputs)
 		var sw wire.StackWriter
@@ -339,7 +343,7 @@ func (c *conn) ExecContext(ctx context.Context, query string, args []driver.Name
 		if err != nil {
 			c.invalidateAutoTx()
 			_ = c.wc.FreeStatement(stmtHandle, wire.DSQLDrop)
-			return nil, err
+			return nil, c.handleFatalErrorLocked(err)
 		}
 
 		rowsAffected := getRowsAffected(c.wc, stmtHandle, stmtType)
@@ -366,14 +370,14 @@ func (c *conn) ExecContext(ctx context.Context, query string, args []driver.Name
 			c.invalidateAutoTx()
 		}
 		_ = c.wc.FreeStatement(stmtHandle, wire.DSQLDrop)
-		return nil, err
+		return nil, c.handleFatalErrorLocked(err)
 	}
 
 	if autoCommit {
 		if err := c.wc.CommitRetaining(txHandle); err != nil {
 			c.invalidateAutoTx()
 			_ = c.wc.FreeStatement(stmtHandle, wire.DSQLDrop)
-			return nil, err
+			return nil, c.handleFatalErrorLocked(err)
 		}
 	}
 
@@ -394,7 +398,7 @@ func (c *conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.closed {
+	if c.closed || c.bad {
 		return nil, driver.ErrBadConn
 	}
 
@@ -408,7 +412,7 @@ func (c *conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 		var err error
 		txHandle, err = c.getAutoTx()
 		if err != nil {
-			return nil, err
+			return nil, c.handleRetryableErrorLocked(err)
 		}
 	}
 
@@ -418,7 +422,7 @@ func (c *conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 		if autoCommit {
 			c.invalidateAutoTx()
 		}
-		return nil, err
+		return nil, c.handleRetryableErrorLocked(err)
 	}
 
 	// Use cached descriptors if available, otherwise parse and cache
@@ -436,7 +440,7 @@ func (c *conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 				c.invalidateAutoTx()
 			}
 			_ = c.wc.FreeStatement(stmtHandle, wire.DSQLDrop)
-			return nil, err
+			return nil, c.handleFatalErrorLocked(err)
 		}
 		blr = wire.BuildParamBLR(inputs)
 		var sw wire.StackWriter
@@ -451,7 +455,7 @@ func (c *conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 				c.invalidateAutoTx()
 			}
 			_ = c.wc.FreeStatement(stmtHandle, wire.DSQLDrop)
-			return nil, execErr
+			return nil, c.handleFatalErrorLocked(execErr)
 		}
 		_ = msgs
 	} else {
@@ -461,7 +465,7 @@ func (c *conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 				c.invalidateAutoTx()
 			}
 			_ = c.wc.FreeStatement(stmtHandle, wire.DSQLDrop)
-			return nil, err
+			return nil, c.handleFatalErrorLocked(err)
 		}
 	}
 
@@ -482,30 +486,28 @@ func (c *conn) Ping(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.closed {
+	if c.closed || c.bad {
 		return driver.ErrBadConn
 	}
-
-	stop := c.withCancel(ctx)
-	defer stop()
-
-	_, err := c.wc.InfoDatabase(pingInfoItems, 256)
-	return err
+	return c.pingLocked(ctx)
 }
 
 var pingInfoItems = []byte{wire.IscInfoBaseLevel}
 
 // ResetSession implements driver.SessionResetter.
 func (c *conn) ResetSession(ctx context.Context) error {
-	if c.closed {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.closed || c.bad {
 		return driver.ErrBadConn
 	}
-	return nil
+	return c.pingLocked(ctx)
 }
 
 // IsValid implements driver.Validator.
 func (c *conn) IsValid() bool {
-	return !c.closed
+	return !c.closed && !c.bad
 }
 
 // CheckNamedValue implements driver.NamedValueChecker.
@@ -557,11 +559,58 @@ func (c *conn) materializeNamedBlobs(txHandle int32, cols []wire.ColumnDescripto
 		}
 		blobID, err := c.wc.WriteBlobData(txHandle, blobData)
 		if err != nil {
-			return fmt.Errorf("create blob param %d: %w", i, err)
+			return fmt.Errorf("create blob param %d: %w", i, c.handleFatalErrorLocked(err))
 		}
 		values[i].Value = blobID
 	}
 	return nil
+}
+
+func (c *conn) pingLocked(ctx context.Context) error {
+	if c.closed || c.bad {
+		return driver.ErrBadConn
+	}
+
+	stop := c.withCancel(ctx)
+	defer stop()
+
+	_, err := c.wc.InfoDatabase(pingInfoItems, 256)
+	return c.handleRetryableErrorLocked(err)
+}
+
+func (c *conn) handleRetryableErrorLocked(err error) error {
+	return c.handleErrorLocked(err, true)
+}
+
+func (c *conn) handleFatalErrorLocked(err error) error {
+	return c.handleErrorLocked(err, false)
+}
+
+func (c *conn) handleErrorLocked(err error, retryable bool) error {
+	if err == nil {
+		return nil
+	}
+	if !isTransportError(err) {
+		return err
+	}
+	c.markBadLocked()
+	if retryable {
+		return wrapBadConn(err)
+	}
+	return err
+}
+
+func (c *conn) markBadLocked() {
+	if c.bad {
+		return
+	}
+	c.bad = true
+	c.activeTx = 0
+	c.autoTx = 0
+	c.dirtyAutoTx = false
+	if c.wc != nil {
+		_ = c.wc.CloseTransport()
+	}
 }
 
 // withCancel starts a goroutine that monitors ctx and cancels the wire

@@ -21,7 +21,11 @@ func (tx *transaction) Commit() error {
 	}
 	tx.done = true
 	tx.conn.activeTx = 0
-	err := tx.conn.wc.Commit(tx.handle)
+	if tx.conn.closed || tx.conn.bad {
+		tx.conn.mu.Unlock()
+		return driver.ErrBadConn
+	}
+	err := tx.conn.handleFatalErrorLocked(tx.conn.wc.Commit(tx.handle))
 	tx.conn.mu.Unlock()
 	return err
 }
@@ -36,7 +40,11 @@ func (tx *transaction) Rollback() error {
 	}
 	tx.done = true
 	tx.conn.activeTx = 0
-	err := tx.conn.wc.Rollback(tx.handle)
+	if tx.conn.closed || tx.conn.bad {
+		tx.conn.mu.Unlock()
+		return driver.ErrBadConn
+	}
+	err := tx.conn.handleFatalErrorLocked(tx.conn.wc.Rollback(tx.handle))
 	tx.conn.mu.Unlock()
 	return err
 }

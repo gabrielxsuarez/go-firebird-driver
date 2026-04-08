@@ -85,11 +85,16 @@ func (r *rows) Close() error {
 	}
 	r.closed = true
 
+	if r.conn.closed || r.conn.bad {
+		r.conn.mu.Unlock()
+		return nil
+	}
+
 	if r.autoFreeStmt {
-		_ = r.conn.wc.RecycleStatement(r.stmtHandle, true)
+		_ = r.conn.handleFatalErrorLocked(r.conn.wc.RecycleStatement(r.stmtHandle, true))
 	} else {
 		// Close cursor but keep statement
-		_ = r.conn.wc.FreeStatement(r.stmtHandle, wire.DSQLClose)
+		_ = r.conn.handleFatalErrorLocked(r.conn.wc.FreeStatement(r.stmtHandle, wire.DSQLClose))
 	}
 	r.conn.mu.Unlock()
 	if r.autoCommitTx {
@@ -153,7 +158,7 @@ func (r *rows) fetch() error {
 	)
 	if err != nil {
 		r.conn.mu.Unlock()
-		return err
+		return r.conn.handleFatalErrorLocked(err)
 	}
 	r.fetchRows = fetched[:0]
 	r.fetchValues = values
@@ -173,7 +178,7 @@ func (r *rows) fetch() error {
 				data, err := r.conn.wc.ReadBlobData(r.txHandle, blobID)
 				if err != nil {
 					r.conn.mu.Unlock()
-					return fmt.Errorf("read blob column %d: %w", ci, err)
+					return fmt.Errorf("read blob column %d: %w", ci, r.conn.handleFatalErrorLocked(err))
 				}
 				if col.SubType == 1 {
 					row[ci] = string(data) // text blob
