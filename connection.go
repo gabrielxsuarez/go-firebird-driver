@@ -334,7 +334,14 @@ func (c *conn) ExecContext(ctx context.Context, query string, args []driver.Name
 		}
 		blr = wire.BuildParamBLR(inputs)
 		var sw wire.StackWriter
-		paramData = wire.EncodeParamsOptimal(&sw, inputs, args)
+		paramData, err = wire.EncodeParamsOptimalErr(&sw, inputs, args)
+		if err != nil {
+			if autoCommit {
+				c.invalidateAutoTx()
+			}
+			_ = c.wc.FreeStatement(stmtHandle, wire.DSQLDrop)
+			return nil, err
+		}
 	}
 
 	// Auto-commit fast path: batch execute+commit_retaining in one flush
@@ -444,7 +451,14 @@ func (c *conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 		}
 		blr = wire.BuildParamBLR(inputs)
 		var sw wire.StackWriter
-		paramData = wire.EncodeParamsOptimal(&sw, inputs, args)
+		paramData, err = wire.EncodeParamsOptimalErr(&sw, inputs, args)
+		if err != nil {
+			if autoCommit {
+				c.invalidateAutoTx()
+			}
+			_ = c.wc.FreeStatement(stmtHandle, wire.DSQLDrop)
+			return nil, err
+		}
 	}
 
 	if stmtType == wire.StmtExecProcedure {

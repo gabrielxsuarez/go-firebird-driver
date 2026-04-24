@@ -119,7 +119,14 @@ func (s *stmt) ExecContext(ctx context.Context, args []driver.NamedValue) (drive
 
 		blr = s.paramBLR()
 		var sw wire.StackWriter
-		paramData = wire.EncodeParamsOptimal(&sw, s.inputs, args)
+		var err error
+		paramData, err = wire.EncodeParamsOptimalErr(&sw, s.inputs, args)
+		if err != nil {
+			if autoCommit {
+				s.conn.invalidateAutoTx()
+			}
+			return nil, err
+		}
 	}
 
 	// Get auto-commit tx if needed
@@ -190,7 +197,14 @@ func (s *stmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driv
 		}
 		blr = s.paramBLR()
 		var sw wire.StackWriter
-		paramData = wire.EncodeParamsOptimal(&sw, s.inputs, args)
+		var err error
+		paramData, err = wire.EncodeParamsOptimalErr(&sw, s.inputs, args)
+		if err != nil {
+			if autoCommit {
+				s.conn.invalidateAutoTx()
+			}
+			return nil, err
+		}
 	}
 
 	outBLR := s.resultBLR()

@@ -3,6 +3,7 @@ package wire
 import (
 	"database/sql/driver"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -12,6 +13,17 @@ import (
 
 	"github.com/gabrielxsuarez/go-firebird-driver/internal/timezone"
 )
+
+const (
+	minInt16 = -1 << 15
+	maxInt16 = 1<<15 - 1
+	minInt32 = -1 << 31
+	maxInt32 = 1<<31 - 1
+	minInt64 = -1 << 63
+	maxInt64 = 1<<63 - 1
+)
+
+var errInvalidDecimal = errors.New("invalid decimal value")
 
 // Modified Julian Date epoch: November 17, 1858.
 var mjdEpoch = time.Date(1858, 11, 17, 0, 0, 0, 0, time.UTC)
@@ -242,6 +254,11 @@ func IsNull(bitset []byte, idx int) bool {
 // Returns the null bitset + encoded data as a single buffer.
 // Optimized: single-pass encoding that builds null bitset and writes values.
 func EncodeParams(w *Writer, descs []ColumnDescriptor, values []any) {
+	_ = EncodeParamsErr(w, descs, values)
+}
+
+// EncodeParamsErr encodes parameter values and reports conversion errors.
+func EncodeParamsErr(w *Writer, descs []ColumnDescriptor, values []any) error {
 	colCount := len(descs)
 	bitsetStart := reserveNullBitset(w, colCount)
 
@@ -255,13 +272,21 @@ func EncodeParams(w *Writer, descs []ColumnDescriptor, values []any) {
 			continue
 		}
 		// Encode non-null value
-		encodeValue(w, &descs[i], values[i])
+		if err := encodeValue(w, &descs[i], values[i]); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // EncodeNamedParams encodes database/sql named values without first boxing them
 // into a transient []any slice.
 func EncodeNamedParams(w *Writer, descs []ColumnDescriptor, values []driver.NamedValue) {
+	_ = EncodeNamedParamsErr(w, descs, values)
+}
+
+// EncodeNamedParamsErr encodes database/sql named values and reports conversion errors.
+func EncodeNamedParamsErr(w *Writer, descs []ColumnDescriptor, values []driver.NamedValue) error {
 	colCount := len(descs)
 	bitsetStart := reserveNullBitset(w, colCount)
 
@@ -272,8 +297,11 @@ func EncodeNamedParams(w *Writer, descs []ColumnDescriptor, values []driver.Name
 			w.buf[bitsetStart+byteIdx] |= 1 << bitIdx
 			continue
 		}
-		encodeValue(w, &descs[i], values[i].Value)
+		if err := encodeValue(w, &descs[i], values[i].Value); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // EncodeParamsOptimal encodes named parameters, using a stack-allocated buffer
@@ -286,20 +314,31 @@ func EncodeNamedParams(w *Writer, descs []ColumnDescriptor, values []driver.Name
 //	var sw StackWriter
 //	paramData := EncodeParamsOptimal(&sw, descs, values)
 func EncodeParamsOptimal(sw *StackWriter, descs []ColumnDescriptor, values []driver.NamedValue) []byte {
+	data, _ := EncodeParamsOptimalErr(sw, descs, values)
+	return data
+}
+
+// EncodeParamsOptimalErr encodes named parameters and reports conversion errors.
+func EncodeParamsOptimalErr(sw *StackWriter, descs []ColumnDescriptor, values []driver.NamedValue) ([]byte, error) {
 	if EstimateParamSize(descs, values) <= 1024 {
 		sw.Reset()
-		EncodeNamedParamsStack(sw, descs, values)
+		if err := EncodeNamedParamsStackErr(sw, descs, values); err != nil {
+			return nil, err
+		}
 		if !sw.Overflowed() {
-			return sw.Bytes()
+			return sw.Bytes(), nil
 		}
 	}
 	// Fallback to pooled writer
 	w := GetWriter()
-	EncodeNamedParams(w, descs, values)
+	if err := EncodeNamedParamsErr(w, descs, values); err != nil {
+		PutWriter(w)
+		return nil, err
+	}
 	data := make([]byte, w.Len())
 	copy(data, w.Bytes())
 	PutWriter(w)
-	return data
+	return data, nil
 }
 
 // EstimateParamSize estimates the wire size needed for encoding the given parameters.
@@ -320,13 +359,18 @@ func EstimateParamSize(descs []ColumnDescriptor, values []driver.NamedValue) int
 // EncodeNamedParamsStack encodes parameters using a StackWriter (stack-allocated buffer).
 // This avoids allocation and sync.Pool overhead for small parameter sets.
 func EncodeNamedParamsStack(w *StackWriter, descs []ColumnDescriptor, values []driver.NamedValue) {
+	_ = EncodeNamedParamsStackErr(w, descs, values)
+}
+
+// EncodeNamedParamsStackErr encodes parameters using a StackWriter and reports conversion errors.
+func EncodeNamedParamsStackErr(w *StackWriter, descs []ColumnDescriptor, values []driver.NamedValue) error {
 	colCount := len(descs)
 	// Reserve null bitset space
 	byteCount := (colCount + 7) / 8
 	padded := (byteCount + 3) & ^3
 	if w.n+padded > len(w.buf) {
 		w.overflow = true
-		return
+		return nil
 	}
 	for i := range padded {
 		w.buf[w.n+i] = 0
@@ -341,33 +385,42 @@ func EncodeNamedParamsStack(w *StackWriter, descs []ColumnDescriptor, values []d
 			w.buf[bitsetStart+byteIdx] |= 1 << bitIdx
 			continue
 		}
-		encodeValueStack(w, &descs[i], values[i].Value)
+		if err := encodeValueStack(w, &descs[i], values[i].Value); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // encodeValueStack encodes a single value into a StackWriter.
-func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) {
+func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) error {
 	sqlType := desc.SQLType & ^int32(1)
 
 	switch sqlType {
 	case SQLShort:
-		v := toInt64(value)
-		if desc.Scale < 0 {
-			v = applyScale(v, desc.Scale)
+		v, err := numericInt64(value, desc.Scale)
+		if err != nil {
+			return err
+		}
+		if v < minInt16 || v > maxInt16 {
+			return numericOverflow(value, desc.Scale)
 		}
 		w.WriteInt32(int32(v))
 
 	case SQLLong:
-		v := toInt64(value)
-		if desc.Scale < 0 {
-			v = applyScale(v, desc.Scale)
+		v, err := numericInt64(value, desc.Scale)
+		if err != nil {
+			return err
+		}
+		if v < minInt32 || v > maxInt32 {
+			return numericOverflow(value, desc.Scale)
 		}
 		w.WriteInt32(int32(v))
 
 	case SQLInt64:
-		v := toInt64(value)
-		if desc.Scale < 0 {
-			v = applyScale(v, desc.Scale)
+		v, err := numericInt64(value, desc.Scale)
+		if err != nil {
+			return err
 		}
 		w.WriteInt64(v)
 
@@ -378,7 +431,7 @@ func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) {
 	case SQLDouble:
 		v := toFloat64(value)
 		if w.n+8 > len(w.buf) {
-			return
+			return nil
 		}
 		binary.BigEndian.PutUint64(w.buf[w.n:], math.Float64bits(v))
 		w.n += 8
@@ -408,7 +461,7 @@ func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) {
 		length := int(desc.Length)
 		pad := (4 - length) & 3
 		if w.n+length+pad > len(w.buf) {
-			return
+			return nil
 		}
 		switch v := value.(type) {
 		case string:
@@ -451,7 +504,7 @@ func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) {
 		data := stringToDecfloat64(s)
 		if w.n+8 > len(w.buf) {
 			w.overflow = true
-			return
+			return nil
 		}
 		copy(w.buf[w.n:], data[:])
 		w.n += 8
@@ -461,17 +514,19 @@ func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) {
 		data := stringToDecfloat128(s)
 		if w.n+16 > len(w.buf) {
 			w.overflow = true
-			return
+			return nil
 		}
 		copy(w.buf[w.n:], data[:])
 		w.n += 16
 
 	case SQLInt128:
-		s := toString(value)
-		data := stringToInt128(s, desc.Scale)
+		data, err := valueToInt128(value, desc.Scale)
+		if err != nil {
+			return err
+		}
 		if w.n+16 > len(w.buf) {
 			w.overflow = true
-			return
+			return nil
 		}
 		copy(w.buf[w.n:], data[:])
 		w.n += 16
@@ -500,6 +555,7 @@ func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) {
 			w.WriteString(toString(value))
 		}
 	}
+	return nil
 }
 
 // estimateValueSize estimates the wire size for a single value.
@@ -548,28 +604,34 @@ func reserveNullBitset(w *Writer, colCount int) int {
 }
 
 // encodeValue encodes a single parameter value based on its SQL type.
-func encodeValue(w *Writer, desc *ColumnDescriptor, value any) {
+func encodeValue(w *Writer, desc *ColumnDescriptor, value any) error {
 	sqlType := desc.SQLType & ^int32(1)
 
 	switch sqlType {
 	case SQLShort:
-		v := toInt64(value)
-		if desc.Scale < 0 {
-			v = applyScale(v, desc.Scale)
+		v, err := numericInt64(value, desc.Scale)
+		if err != nil {
+			return err
+		}
+		if v < minInt16 || v > maxInt16 {
+			return numericOverflow(value, desc.Scale)
 		}
 		w.WriteInt32(int32(v))
 
 	case SQLLong:
-		v := toInt64(value)
-		if desc.Scale < 0 {
-			v = applyScale(v, desc.Scale)
+		v, err := numericInt64(value, desc.Scale)
+		if err != nil {
+			return err
+		}
+		if v < minInt32 || v > maxInt32 {
+			return numericOverflow(value, desc.Scale)
 		}
 		w.WriteInt32(int32(v))
 
 	case SQLInt64:
-		v := toInt64(value)
-		if desc.Scale < 0 {
-			v = applyScale(v, desc.Scale)
+		v, err := numericInt64(value, desc.Scale)
+		if err != nil {
+			return err
 		}
 		w.WriteInt64(v)
 
@@ -661,8 +723,10 @@ func encodeValue(w *Writer, desc *ColumnDescriptor, value any) {
 		w.n += 16
 
 	case SQLInt128:
-		s := toString(value)
-		data := stringToInt128(s, desc.Scale)
+		data, err := valueToInt128(value, desc.Scale)
+		if err != nil {
+			return err
+		}
 		w.grow(16)
 		copy(w.buf[w.n:], data[:])
 		w.n += 16
@@ -691,6 +755,7 @@ func encodeValue(w *Writer, desc *ColumnDescriptor, value any) {
 			w.WriteString(toString(value))
 		}
 	}
+	return nil
 }
 
 // --- Type conversion helpers ---
@@ -731,6 +796,198 @@ func toInt64(v any) int64 {
 	default:
 		return 0
 	}
+}
+
+func numericInt64(v any, scale int32) (int64, error) {
+	switch x := v.(type) {
+	case int:
+		return scaleIntegralInt64(int64(x), scale)
+	case int8:
+		return scaleIntegralInt64(int64(x), scale)
+	case int16:
+		return scaleIntegralInt64(int64(x), scale)
+	case int32:
+		return scaleIntegralInt64(int64(x), scale)
+	case int64:
+		return scaleIntegralInt64(x, scale)
+	case uint:
+		if uint64(x) > uint64(maxInt64) {
+			return 0, numericOverflow(v, scale)
+		}
+		return scaleIntegralInt64(int64(x), scale)
+	case uint8:
+		return scaleIntegralInt64(int64(x), scale)
+	case uint16:
+		return scaleIntegralInt64(int64(x), scale)
+	case uint32:
+		return scaleIntegralInt64(int64(x), scale)
+	case uint64:
+		if x > uint64(maxInt64) {
+			return 0, numericOverflow(v, scale)
+		}
+		return scaleIntegralInt64(int64(x), scale)
+	case float32:
+		return decimalStringToScaledInt64(strconv.FormatFloat(float64(x), 'f', -1, 32), scale)
+	case float64:
+		return decimalStringToScaledInt64(strconv.FormatFloat(x, 'f', -1, 64), scale)
+	case bool:
+		if x {
+			return scaleIntegralInt64(1, scale)
+		}
+		return 0, nil
+	case string:
+		return decimalStringToScaledInt64(x, scale)
+	case []byte:
+		return decimalStringToScaledInt64(string(x), scale)
+	default:
+		return 0, fmt.Errorf("firebird: cannot convert %T to numeric", v)
+	}
+}
+
+func scaleIntegralInt64(v int64, scale int32) (int64, error) {
+	if scale >= 0 {
+		return v, nil
+	}
+	for i := int32(0); i > scale; i-- {
+		if v > maxInt64/10 || v < minInt64/10 {
+			return 0, numericOverflow(v, scale)
+		}
+		v *= 10
+	}
+	return v, nil
+}
+
+func decimalStringToScaledInt64(s string, scale int32) (int64, error) {
+	v, err := decimalStringToScaledBigInt(s, scale)
+	if err != nil {
+		return 0, err
+	}
+	if !v.IsInt64() {
+		return 0, numericOverflow(s, scale)
+	}
+	return v.Int64(), nil
+}
+
+func decimalStringToScaledBigInt(s string, scale int32) (*big.Int, error) {
+	negative, digits, exp, err := parseDecimalStringStrict(s)
+	if err != nil {
+		return nil, err
+	}
+
+	coeff := new(big.Int)
+	if _, ok := coeff.SetString(string(digits), 10); !ok {
+		return nil, errInvalidDecimal
+	}
+
+	shift := exp - int(scale)
+	if shift > 128 && coeff.Sign() != 0 {
+		return nil, numericOverflow(s, scale)
+	}
+
+	if shift >= 0 {
+		coeff.Mul(coeff, pow10Big(shift))
+	} else {
+		divisor := pow10Big(-shift)
+		quotient, remainder := new(big.Int), new(big.Int)
+		quotient.QuoRem(coeff, divisor, remainder)
+
+		// Round half away from zero, matching common numeric conversion semantics.
+		if new(big.Int).Lsh(remainder, 1).Cmp(divisor) >= 0 {
+			quotient.Add(quotient, big.NewInt(1))
+		}
+		coeff = quotient
+	}
+
+	if negative && coeff.Sign() != 0 {
+		coeff.Neg(coeff)
+	}
+	return coeff, nil
+}
+
+func parseDecimalStringStrict(s string) (negative bool, digits []byte, exp int, err error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false, nil, 0, errInvalidDecimal
+	}
+
+	i := 0
+	if s[i] == '-' {
+		negative = true
+		i++
+	} else if s[i] == '+' {
+		i++
+	}
+	if i == len(s) {
+		return false, nil, 0, errInvalidDecimal
+	}
+
+	fracDigits := 0
+	seenDot := false
+	for i < len(s) {
+		ch := s[i]
+		if ch >= '0' && ch <= '9' {
+			digits = append(digits, ch)
+			if seenDot {
+				fracDigits++
+			}
+			i++
+			continue
+		}
+		if ch == '.' {
+			if seenDot {
+				return false, nil, 0, errInvalidDecimal
+			}
+			seenDot = true
+			i++
+			continue
+		}
+		break
+	}
+	if len(digits) == 0 {
+		return false, nil, 0, errInvalidDecimal
+	}
+
+	exp = -fracDigits
+	if i < len(s) && (s[i] == 'e' || s[i] == 'E') {
+		i++
+		expStart := i
+		if i < len(s) && (s[i] == '+' || s[i] == '-') {
+			i++
+		}
+		digitStart := i
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+		if digitStart == i {
+			return false, nil, 0, errInvalidDecimal
+		}
+		exponent, parseErr := strconv.Atoi(s[expStart:i])
+		if parseErr != nil {
+			return false, nil, 0, parseErr
+		}
+		exp += exponent
+	}
+	if i != len(s) {
+		return false, nil, 0, errInvalidDecimal
+	}
+
+	firstNonZero := 0
+	for firstNonZero < len(digits)-1 && digits[firstNonZero] == '0' {
+		firstNonZero++
+	}
+	digits = digits[firstNonZero:]
+	return negative, digits, exp, nil
+}
+
+func pow10Big(n int) *big.Int {
+	if n <= 0 {
+		return big.NewInt(1)
+	}
+	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil)
+}
+
+func numericOverflow(value any, scale int32) error {
+	return fmt.Errorf("firebird: numeric value %v overflows scale %d", value, scale)
 }
 
 func toFloat64(v any) float64 {
@@ -1413,40 +1670,62 @@ func stringToDecfloat128(s string) [16]byte {
 	return result
 }
 
+func valueToInt128(value any, scale int32) ([16]byte, error) {
+	var s string
+	switch v := value.(type) {
+	case int:
+		s = strconv.FormatInt(int64(v), 10)
+	case int8:
+		s = strconv.FormatInt(int64(v), 10)
+	case int16:
+		s = strconv.FormatInt(int64(v), 10)
+	case int32:
+		s = strconv.FormatInt(int64(v), 10)
+	case int64:
+		s = strconv.FormatInt(v, 10)
+	case uint:
+		s = strconv.FormatUint(uint64(v), 10)
+	case uint8:
+		s = strconv.FormatUint(uint64(v), 10)
+	case uint16:
+		s = strconv.FormatUint(uint64(v), 10)
+	case uint32:
+		s = strconv.FormatUint(uint64(v), 10)
+	case uint64:
+		s = strconv.FormatUint(v, 10)
+	case float32:
+		s = strconv.FormatFloat(float64(v), 'f', -1, 32)
+	case float64:
+		s = strconv.FormatFloat(v, 'f', -1, 64)
+	case bool:
+		if v {
+			s = "1"
+		} else {
+			s = "0"
+		}
+	case string:
+		s = v
+	case []byte:
+		s = string(v)
+	default:
+		return [16]byte{}, fmt.Errorf("firebird: cannot convert %T to INT128", value)
+	}
+	return stringToInt128Err(s, scale)
+}
+
 // stringToInt128 converts a string to 16 bytes big-endian two's complement INT128.
 // If scale < 0, the string value is multiplied by 10^(-scale).
 func stringToInt128(s string, scale int32) [16]byte {
+	result, _ := stringToInt128Err(s, scale)
+	return result
+}
+
+func stringToInt128Err(s string, scale int32) ([16]byte, error) {
 	var result [16]byte
 
-	v, ok := new(big.Int).SetString(s, 10)
-	if !ok {
-		// Try parsing as float string (e.g., "123.456")
-		negative, digits, exp := parseDecimalString(s)
-		if len(digits) == 0 {
-			return result
-		}
-		v = new(big.Int)
-		for _, d := range digits {
-			v.Mul(v, big.NewInt(10))
-			v.Add(v, big.NewInt(int64(d)))
-		}
-		if exp > 0 {
-			pow := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(exp)), nil)
-			v.Mul(v, pow)
-		} else if exp < 0 {
-			// Digits after decimal: these are already incorporated in v,
-			// but we need to account for scale separately
-			pow := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-exp)), nil)
-			v.Div(v, pow)
-		}
-		if negative {
-			v.Neg(v)
-		}
-	}
-
-	if scale < 0 {
-		pow := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-scale)), nil)
-		v.Mul(v, pow)
+	v, err := decimalStringToScaledBigInt(s, scale)
+	if err != nil {
+		return result, err
 	}
 
 	if v.Sign() >= 0 {
@@ -1465,7 +1744,7 @@ func stringToInt128(s string, scale int32) [16]byte {
 		}
 		copy(result[16-len(b):], b)
 	}
-	return result
+	return result, nil
 }
 
 // tzOffsetToID converts a timezone offset in seconds to a Firebird timezone ID.
