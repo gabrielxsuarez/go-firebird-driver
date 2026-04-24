@@ -60,7 +60,7 @@ func ParseDSN(dsn string) (*Config, error) {
 		cfg.Port = u.Port()
 	}
 
-	cfg.Database = strings.TrimPrefix(u.Path, "/")
+	cfg.Database = parseDatabasePath(u.Path)
 	if cfg.Database == "" {
 		return nil, fmt.Errorf("firebird: database path required in DSN")
 	}
@@ -100,4 +100,23 @@ func ParseDSN(dsn string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func parseDatabasePath(path string) string {
+	if strings.HasPrefix(path, "//") {
+		return path[1:]
+	}
+	if !strings.HasPrefix(path, "/") {
+		return path
+	}
+
+	withoutLeadingSlash := path[1:]
+	if isWindowsDrivePath(withoutLeadingSlash) || !strings.ContainsRune(withoutLeadingSlash, '/') {
+		return withoutLeadingSlash
+	}
+	return path
+}
+
+func isWindowsDrivePath(path string) bool {
+	return len(path) >= 2 && path[1] == ':'
 }
