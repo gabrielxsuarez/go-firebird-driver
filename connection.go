@@ -119,6 +119,7 @@ func newConnection(ctx context.Context, cfg *Config) (*conn, error) {
 		User:           cfg.User,
 		Password:       cfg.Password,
 		Charset:        cfg.Charset,
+		ClientEncoding: cfg.ClientEncoding,
 		Dialect:        cfg.Dialect,
 		WireCrypt:      cfg.WireCrypt,
 		WireCryptSet:   true,
@@ -334,7 +335,7 @@ func (c *conn) ExecContext(ctx context.Context, query string, args []driver.Name
 		}
 		blr = wire.BuildParamBLR(inputs)
 		var sw wire.StackWriter
-		paramData, err = wire.EncodeParamsOptimalErr(&sw, inputs, args)
+		paramData, err = wire.EncodeParamsOptimalErrWithCodec(&sw, inputs, args, c.wc.TextCodec())
 		if err != nil {
 			if autoCommit {
 				c.invalidateAutoTx()
@@ -451,7 +452,7 @@ func (c *conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 		}
 		blr = wire.BuildParamBLR(inputs)
 		var sw wire.StackWriter
-		paramData, err = wire.EncodeParamsOptimalErr(&sw, inputs, args)
+		paramData, err = wire.EncodeParamsOptimalErrWithCodec(&sw, inputs, args, c.wc.TextCodec())
 		if err != nil {
 			if autoCommit {
 				c.invalidateAutoTx()
@@ -567,7 +568,15 @@ func (c *conn) materializeNamedBlobs(txHandle int32, cols []wire.ColumnDescripto
 		case []byte:
 			blobData = v
 		case string:
-			blobData = []byte(v)
+			if col.SubType == 1 {
+				encoded, err := c.wc.EncodeText(v)
+				if err != nil {
+					return fmt.Errorf("encode blob param %d: %w", i, err)
+				}
+				blobData = []byte(encoded)
+			} else {
+				blobData = []byte(v)
+			}
 		default:
 			continue
 		}

@@ -20,6 +20,8 @@ type ProtocolConfig struct {
 
 	// Charset for the connection. Default: "UTF8".
 	Charset string
+	// ClientEncoding overrides Go-side text conversion without changing lc_ctype.
+	ClientEncoding string
 	// SQL dialect. Default: 3.
 	Dialect uint32
 	// Wire encryption preference. Default: WireCryptEnabled.
@@ -64,6 +66,10 @@ func supportedProtocols() []protocolDescriptor {
 func Connect(cfg *ProtocolConfig) (*WireConnection, error) {
 	if cfg.Charset == "" {
 		cfg.Charset = "UTF8"
+	}
+	textCodec, err := NewTextCodec(cfg.Charset, cfg.ClientEncoding)
+	if err != nil {
+		return nil, err
 	}
 	if cfg.Dialect == 0 {
 		cfg.Dialect = SQLDialectCurrent
@@ -345,6 +351,7 @@ func Connect(cfg *ProtocolConfig) (*WireConnection, error) {
 		dbHandle:        resp.Handle,
 		protocolVersion: protocolVersion,
 		charset:         cfg.Charset,
+		textCodec:       textCodec,
 		lazySend:        lazySend,
 	}
 

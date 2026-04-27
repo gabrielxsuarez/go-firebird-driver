@@ -92,6 +92,12 @@ func TimeTZToTime(ticks uint32, tzValue uint32) time.Time {
 // DecodeColumn decodes a single column value from the reader based on its
 // SQL type descriptor. Returns the Go value or nil for NULL.
 func DecodeColumn(r *Reader, desc *ColumnDescriptor) any {
+	return DecodeColumnWithCodec(r, desc, nil)
+}
+
+// DecodeColumnWithCodec decodes a column and converts text bytes through codec
+// when the connection uses a non-UTF-8 client encoding.
+func DecodeColumnWithCodec(r *Reader, desc *ColumnDescriptor, codec *TextCodec) any {
 	sqlType := desc.SQLType & ^int32(1)
 
 	switch sqlType {
@@ -169,6 +175,7 @@ func DecodeColumn(r *Reader, desc *ColumnDescriptor) any {
 		result = result[:length]
 		if desc.SubType != 1 { // not OCTETS
 			result = trimRightSpaces(result)
+			return decodeText(codec, result)
 		}
 		return string(result)
 
@@ -177,8 +184,10 @@ func DecodeColumn(r *Reader, desc *ColumnDescriptor) any {
 		if r.Err() != nil {
 			return ""
 		}
-		// ReadBuffer returns slice of internal buffer; convert directly
-		return string(data)
+		if desc.SubType == 1 { // OCTETS
+			return string(data)
+		}
+		return decodeText(codec, data)
 
 	case SQLBlob:
 		blobID := r.ReadInt64()
@@ -272,7 +281,7 @@ func EncodeParamsErr(w *Writer, descs []ColumnDescriptor, values []any) error {
 			continue
 		}
 		// Encode non-null value
-		if err := encodeValue(w, &descs[i], values[i]); err != nil {
+		if err := encodeValue(w, &descs[i], values[i], nil); err != nil {
 			return err
 		}
 	}
@@ -287,6 +296,12 @@ func EncodeNamedParams(w *Writer, descs []ColumnDescriptor, values []driver.Name
 
 // EncodeNamedParamsErr encodes database/sql named values and reports conversion errors.
 func EncodeNamedParamsErr(w *Writer, descs []ColumnDescriptor, values []driver.NamedValue) error {
+	return EncodeNamedParamsErrWithCodec(w, descs, values, nil)
+}
+
+// EncodeNamedParamsErrWithCodec encodes database/sql named values and converts
+// string parameters through codec when the connection is not UTF-8 passthrough.
+func EncodeNamedParamsErrWithCodec(w *Writer, descs []ColumnDescriptor, values []driver.NamedValue, codec *TextCodec) error {
 	colCount := len(descs)
 	bitsetStart := reserveNullBitset(w, colCount)
 
@@ -297,7 +312,7 @@ func EncodeNamedParamsErr(w *Writer, descs []ColumnDescriptor, values []driver.N
 			w.buf[bitsetStart+byteIdx] |= 1 << bitIdx
 			continue
 		}
-		if err := encodeValue(w, &descs[i], values[i].Value); err != nil {
+		if err := encodeValue(w, &descs[i], values[i].Value, codec); err != nil {
 			return err
 		}
 	}
@@ -320,9 +335,14 @@ func EncodeParamsOptimal(sw *StackWriter, descs []ColumnDescriptor, values []dri
 
 // EncodeParamsOptimalErr encodes named parameters and reports conversion errors.
 func EncodeParamsOptimalErr(sw *StackWriter, descs []ColumnDescriptor, values []driver.NamedValue) ([]byte, error) {
+	return EncodeParamsOptimalErrWithCodec(sw, descs, values, nil)
+}
+
+// EncodeParamsOptimalErrWithCodec encodes named parameters using codec for text.
+func EncodeParamsOptimalErrWithCodec(sw *StackWriter, descs []ColumnDescriptor, values []driver.NamedValue, codec *TextCodec) ([]byte, error) {
 	if EstimateParamSize(descs, values) <= 1024 {
 		sw.Reset()
-		if err := EncodeNamedParamsStackErr(sw, descs, values); err != nil {
+		if err := EncodeNamedParamsStackErrWithCodec(sw, descs, values, codec); err != nil {
 			return nil, err
 		}
 		if !sw.Overflowed() {
@@ -331,7 +351,7 @@ func EncodeParamsOptimalErr(sw *StackWriter, descs []ColumnDescriptor, values []
 	}
 	// Fallback to pooled writer
 	w := GetWriter()
-	if err := EncodeNamedParamsErr(w, descs, values); err != nil {
+	if err := EncodeNamedParamsErrWithCodec(w, descs, values, codec); err != nil {
 		PutWriter(w)
 		return nil, err
 	}
@@ -364,6 +384,12 @@ func EncodeNamedParamsStack(w *StackWriter, descs []ColumnDescriptor, values []d
 
 // EncodeNamedParamsStackErr encodes parameters using a StackWriter and reports conversion errors.
 func EncodeNamedParamsStackErr(w *StackWriter, descs []ColumnDescriptor, values []driver.NamedValue) error {
+	return EncodeNamedParamsStackErrWithCodec(w, descs, values, nil)
+}
+
+// EncodeNamedParamsStackErrWithCodec encodes parameters using a StackWriter and
+// converts string parameters through codec when needed.
+func EncodeNamedParamsStackErrWithCodec(w *StackWriter, descs []ColumnDescriptor, values []driver.NamedValue, codec *TextCodec) error {
 	colCount := len(descs)
 	// Reserve null bitset space
 	byteCount := (colCount + 7) / 8
@@ -385,7 +411,7 @@ func EncodeNamedParamsStackErr(w *StackWriter, descs []ColumnDescriptor, values 
 			w.buf[bitsetStart+byteIdx] |= 1 << bitIdx
 			continue
 		}
-		if err := encodeValueStack(w, &descs[i], values[i].Value); err != nil {
+		if err := encodeValueStack(w, &descs[i], values[i].Value, codec); err != nil {
 			return err
 		}
 	}
@@ -393,7 +419,7 @@ func EncodeNamedParamsStackErr(w *StackWriter, descs []ColumnDescriptor, values 
 }
 
 // encodeValueStack encodes a single value into a StackWriter.
-func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) error {
+func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any, codec *TextCodec) error {
 	sqlType := desc.SQLType & ^int32(1)
 
 	switch sqlType {
@@ -465,7 +491,11 @@ func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) error {
 		}
 		switch v := value.(type) {
 		case string:
-			n := copy(w.buf[w.n:w.n+length], v)
+			s, err := encodeText(codec, v)
+			if err != nil {
+				return err
+			}
+			n := copy(w.buf[w.n:w.n+length], s)
 			for i := n; i < length; i++ {
 				w.buf[w.n+i] = 0x20
 			}
@@ -475,7 +505,10 @@ func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) error {
 				w.buf[w.n+i] = 0x20
 			}
 		default:
-			s := toString(value)
+			s, err := encodeText(codec, toString(value))
+			if err != nil {
+				return err
+			}
 			n := copy(w.buf[w.n:w.n+length], s)
 			for i := n; i < length; i++ {
 				w.buf[w.n+i] = 0x20
@@ -488,11 +521,19 @@ func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) error {
 	case SQLVarying:
 		switch v := value.(type) {
 		case string:
-			w.WriteString(v)
+			s, err := encodeText(codec, v)
+			if err != nil {
+				return err
+			}
+			w.WriteString(s)
 		case []byte:
 			w.WriteBuffer(v)
 		default:
-			w.WriteString(toString(value))
+			s, err := encodeText(codec, toString(value))
+			if err != nil {
+				return err
+			}
+			w.WriteString(s)
 		}
 
 	case SQLBlob:
@@ -548,11 +589,19 @@ func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) error {
 		// Fallback: write as string
 		switch v := value.(type) {
 		case string:
-			w.WriteString(v)
+			s, err := encodeText(codec, v)
+			if err != nil {
+				return err
+			}
+			w.WriteString(s)
 		case []byte:
 			w.WriteBuffer(v)
 		default:
-			w.WriteString(toString(value))
+			s, err := encodeText(codec, toString(value))
+			if err != nil {
+				return err
+			}
+			w.WriteString(s)
 		}
 	}
 	return nil
@@ -604,7 +653,7 @@ func reserveNullBitset(w *Writer, colCount int) int {
 }
 
 // encodeValue encodes a single parameter value based on its SQL type.
-func encodeValue(w *Writer, desc *ColumnDescriptor, value any) error {
+func encodeValue(w *Writer, desc *ColumnDescriptor, value any, codec *TextCodec) error {
 	sqlType := desc.SQLType & ^int32(1)
 
 	switch sqlType {
@@ -673,7 +722,11 @@ func encodeValue(w *Writer, desc *ColumnDescriptor, value any) error {
 
 		switch v := value.(type) {
 		case string:
-			n := copy(w.buf[w.n:w.n+length], v)
+			s, err := encodeText(codec, v)
+			if err != nil {
+				return err
+			}
+			n := copy(w.buf[w.n:w.n+length], s)
 			for i := n; i < length; i++ {
 				w.buf[w.n+i] = 0x20
 			}
@@ -683,7 +736,10 @@ func encodeValue(w *Writer, desc *ColumnDescriptor, value any) error {
 				w.buf[w.n+i] = 0x20
 			}
 		default:
-			s := toString(value)
+			s, err := encodeText(codec, toString(value))
+			if err != nil {
+				return err
+			}
 			n := copy(w.buf[w.n:w.n+length], s)
 			for i := n; i < length; i++ {
 				w.buf[w.n+i] = 0x20
@@ -696,11 +752,19 @@ func encodeValue(w *Writer, desc *ColumnDescriptor, value any) error {
 	case SQLVarying:
 		switch v := value.(type) {
 		case string:
-			w.WriteString(v)
+			s, err := encodeText(codec, v)
+			if err != nil {
+				return err
+			}
+			w.WriteString(s)
 		case []byte:
 			w.WriteBuffer(v)
 		default:
-			w.WriteString(toString(value))
+			s, err := encodeText(codec, toString(value))
+			if err != nil {
+				return err
+			}
+			w.WriteString(s)
 		}
 
 	case SQLBlob:
@@ -748,11 +812,19 @@ func encodeValue(w *Writer, desc *ColumnDescriptor, value any) error {
 		// Fallback: write as string
 		switch v := value.(type) {
 		case string:
-			w.WriteString(v)
+			s, err := encodeText(codec, v)
+			if err != nil {
+				return err
+			}
+			w.WriteString(s)
 		case []byte:
 			w.WriteBuffer(v)
 		default:
-			w.WriteString(toString(value))
+			s, err := encodeText(codec, toString(value))
+			if err != nil {
+				return err
+			}
+			w.WriteString(s)
 		}
 	}
 	return nil

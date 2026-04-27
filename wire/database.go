@@ -17,6 +17,7 @@ type WireConnection struct {
 	dbHandle        int32
 	protocolVersion uint32
 	charset         string
+	textCodec       *TextCodec
 	lazySend        bool // true when ptype_lazy_send is negotiated
 
 	// Lazy send: count of responses not yet consumed.
@@ -41,6 +42,21 @@ const maxFreeHandles = 8
 // ProtocolVersion returns the negotiated protocol version.
 func (wc *WireConnection) ProtocolVersion() uint32 {
 	return wc.protocolVersion
+}
+
+// TextCodec returns the connection text codec. Nil means UTF-8 passthrough.
+func (wc *WireConnection) TextCodec() *TextCodec {
+	return wc.textCodec
+}
+
+// DecodeText converts Firebird text bytes to a Go UTF-8 string.
+func (wc *WireConnection) DecodeText(data []byte) string {
+	return decodeText(wc.textCodec, data)
+}
+
+// EncodeText converts a Go UTF-8 string to the configured Firebird text bytes.
+func (wc *WireConnection) EncodeText(s string) (string, error) {
+	return encodeText(wc.textCodec, s)
 }
 
 // SetDeadline sets the read/write deadline on the underlying connection.
@@ -283,11 +299,16 @@ func (wc *WireConnection) PrepareStatement(txHandle, stmtHandle int32, sql strin
 // PrepareStatementWithItems sends op_prepare_statement using a caller-provided
 // info item set. This allows lighter describe requests for exec-only paths.
 func (wc *WireConnection) PrepareStatementWithItems(txHandle, stmtHandle int32, sql string, bufferLength int32, items []byte) ([]byte, error) {
+	encodedSQL, err := wc.EncodeText(sql)
+	if err != nil {
+		return nil, fmt.Errorf("op_prepare_statement: encode sql: %w", err)
+	}
+
 	wc.writer.WriteInt32(opPrepareStatement)
 	wc.writer.WriteInt32(txHandle)
 	wc.writer.WriteInt32(stmtHandle)
 	wc.writer.WriteUInt32(SQLDialectCurrent)
-	wc.writer.WriteString(sql)
+	wc.writer.WriteString(encodedSQL)
 	wc.writer.WriteBuffer(items)
 	wc.writer.WriteInt32(bufferLength)
 
@@ -312,7 +333,6 @@ func (wc *WireConnection) AllocateAndPrepare(txHandle int32, sql string, bufferL
 // info item set. If a pooled statement handle is available, skips the allocate
 // and sends only prepare (saving 1 message + 1 response per operation).
 func (wc *WireConnection) AllocateAndPrepareWithItems(txHandle int32, sql string, bufferLength int32, items []byte) (int32, []byte, error) {
-
 	// Fast path: reuse a pooled handle (prepare only, no allocate needed)
 	if wc.freeCount > 0 {
 		wc.freeCount--
@@ -324,6 +344,11 @@ func (wc *WireConnection) AllocateAndPrepareWithItems(txHandle int32, sql string
 		return stmtHandle, data, nil
 	}
 
+	encodedSQL, err := wc.EncodeText(sql)
+	if err != nil {
+		return 0, nil, fmt.Errorf("allocate+prepare: encode sql: %w", err)
+	}
+
 	// Write allocate (no flush)
 	wc.writer.WriteInt32(opAllocateStatement)
 	wc.writer.WriteInt32(wc.dbHandle)
@@ -333,7 +358,7 @@ func (wc *WireConnection) AllocateAndPrepareWithItems(txHandle int32, sql string
 	wc.writer.WriteInt32(txHandle)
 	wc.writer.WriteInt32(int32(InvalidObject)) // placeholder
 	wc.writer.WriteUInt32(SQLDialectCurrent)
-	wc.writer.WriteString(sql)
+	wc.writer.WriteString(encodedSQL)
 	wc.writer.WriteBuffer(items)
 	wc.writer.WriteInt32(bufferLength)
 
@@ -715,7 +740,7 @@ func (wc *WireConnection) FetchRowsReuse(
 			if IsNull(wc.nullBuf[:], j) {
 				row[j] = nil
 			} else {
-				row[j] = DecodeColumn(wc.reader, &descs[j])
+				row[j] = DecodeColumnWithCodec(wc.reader, &descs[j], wc.textCodec)
 			}
 		}
 		if wc.reader.Err() != nil {
