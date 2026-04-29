@@ -58,7 +58,7 @@ func TestParseDSNDatabasePathCompatibility(t *testing.T) {
 }
 
 func TestParseDSNDefaultsAndParams(t *testing.T) {
-	cfg, err := ParseDSN("user:password@localhost/dbname?charset=WIN1251&client_encoding=WIN1252&dialect=1&role=ADMIN&wire_crypt=disabled&fetch_size=500")
+	cfg, err := ParseDSN("user:password@localhost/dbname?charset=WIN1251&dialect=1&role=ADMIN&wire_crypt=disabled&fetch_size=500")
 	if err != nil {
 		t.Fatalf("ParseDSN() error = %v", err)
 	}
@@ -74,9 +74,6 @@ func TestParseDSNDefaultsAndParams(t *testing.T) {
 	}
 	if cfg.Charset != "WIN1251" {
 		t.Fatalf("Charset = %q, want WIN1251", cfg.Charset)
-	}
-	if cfg.ClientEncoding != "WIN1252" {
-		t.Fatalf("ClientEncoding = %q, want WIN1252", cfg.ClientEncoding)
 	}
 	if cfg.Dialect != 1 {
 		t.Fatalf("Dialect = %d, want 1", cfg.Dialect)

@@ -113,7 +113,6 @@ firebird://user:password@host:port/path/to/database.fdb?param=value
 Main parameters:
 
 - `charset` (`UTF8` by default)
-- `client_encoding` or `encoding` (optional Go-side text conversion override)
 - `dialect` (`3` by default)
 - `role`
 - `wire_crypt` (`enabled` by default)

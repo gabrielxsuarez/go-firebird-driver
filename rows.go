@@ -181,7 +181,7 @@ func (r *rows) fetch() error {
 					return fmt.Errorf("read blob column %d: %w", ci, r.conn.handleFatalErrorLocked(err))
 				}
 				if col.SubType == 1 {
-					row[ci] = r.conn.wc.DecodeText(data) // text blob
+					row[ci] = string(data) // text blob
 				} else {
 					row[ci] = data // binary blob
 				}

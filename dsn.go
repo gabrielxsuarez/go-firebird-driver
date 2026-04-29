@@ -11,19 +11,16 @@ import (
 
 // Config holds parsed DSN parameters.
 type Config struct {
-	Host     string
-	Port     string
-	Database string
-	User     string
-	Password string
-	Charset  string
-	// ClientEncoding overrides the Go-side text byte conversion without
-	// changing the Firebird connection charset sent as lc_ctype.
-	ClientEncoding string
-	Dialect        uint32
-	Role           string
-	WireCrypt      uint32
-	FetchSize      int
+	Host      string
+	Port      string
+	Database  string
+	User      string
+	Password  string
+	Charset   string
+	Dialect   uint32
+	Role      string
+	WireCrypt uint32
+	FetchSize int
 }
 
 // ParseDSN parses a Firebird DSN string.
@@ -77,8 +74,6 @@ func ParseDSN(dsn string) (*Config, error) {
 		switch strings.ToLower(key) {
 		case "charset":
 			cfg.Charset = val
-		case "client_encoding", "encoding":
-			cfg.ClientEncoding = val
 		case "dialect":
 			d, err := strconv.ParseUint(val, 10, 32)
 			if err != nil {
