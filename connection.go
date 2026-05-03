@@ -367,7 +367,7 @@ func (c *conn) ExecContext(ctx context.Context, query string, args []driver.Name
 
 	if stmtType == wire.StmtExecProcedure {
 		outBLR := []byte{}
-		_, _, err = c.wc.Execute2(stmtHandle, txHandle, blr, paramData, outBLR)
+		_, _, err = c.wc.Execute2(stmtHandle, txHandle, blr, paramData, outBLR, nil)
 	} else {
 		err = c.wc.Execute(stmtHandle, txHandle, blr, paramData)
 	}
@@ -461,9 +461,12 @@ func (c *conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 		}
 	}
 
+	eof := false
+	hasCursor := true
+	var initialRows [][]any
 	if stmtType == wire.StmtExecProcedure {
 		outBLR := wire.BuildBLR(outputs)
-		msgs, _, execErr := c.wc.Execute2(stmtHandle, txHandle, blr, paramData, outBLR)
+		msgs, row, execErr := c.wc.Execute2(stmtHandle, txHandle, blr, paramData, outBLR, outputs)
 		if execErr != nil {
 			if autoCommit {
 				c.invalidateAutoTx()
@@ -471,7 +474,11 @@ func (c *conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 			_ = c.wc.FreeStatement(stmtHandle, wire.DSQLDrop)
 			return nil, c.handleFatalErrorLocked(execErr)
 		}
-		_ = msgs
+		if msgs > 0 {
+			initialRows = [][]any{row}
+		}
+		eof = true
+		hasCursor = false
 	} else {
 		err = c.wc.Execute(stmtHandle, txHandle, blr, paramData)
 		if err != nil {
@@ -491,6 +498,9 @@ func (c *conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 		fetchSize:    c.fetchSize,
 		autoFreeStmt: autoCommit,
 		autoCommitTx: autoCommit,
+		hasCursor:    hasCursor,
+		buf:          initialRows,
+		eof:          eof,
 		hasBlobs:     hasBlobs(outputs),
 	}, nil
 }

@@ -20,6 +20,7 @@ type rows struct {
 	fetchSize    int
 	autoFreeStmt bool // if true, frees stmt on close (ad-hoc queries only)
 	autoCommitTx bool // if true, commits tx on close
+	hasCursor    bool
 
 	// fetch buffer
 	buf         [][]any
@@ -91,8 +92,8 @@ func (r *rows) Close() error {
 	}
 
 	if r.autoFreeStmt {
-		_ = r.conn.handleFatalErrorLocked(r.conn.wc.RecycleStatement(r.stmtHandle, true))
-	} else {
+		_ = r.conn.handleFatalErrorLocked(r.conn.wc.RecycleStatement(r.stmtHandle, r.hasCursor))
+	} else if r.hasCursor {
 		// Close cursor but keep statement
 		_ = r.conn.handleFatalErrorLocked(r.conn.wc.FreeStatement(r.stmtHandle, wire.DSQLClose))
 	}

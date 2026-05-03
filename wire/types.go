@@ -250,6 +250,35 @@ func IsNull(bitset []byte, idx int) bool {
 	return (bitset[byteIdx] & (1 << bitIdx)) != 0
 }
 
+// DecodeRow decodes one protocol 13+ row using the supplied descriptors.
+func DecodeRow(r *Reader, descs []ColumnDescriptor, nullBuf []byte, row []any) error {
+	if len(row) < len(descs) {
+		return fmt.Errorf("row buffer has %d columns, need %d", len(row), len(descs))
+	}
+
+	byteCount := (len(descs) + 7) / 8
+	padded := (byteCount + 3) & ^3
+	if len(nullBuf) < padded {
+		nullBuf = make([]byte, padded)
+	} else {
+		nullBuf = nullBuf[:padded]
+	}
+
+	readNullBitsetInto(r, len(descs), nullBuf)
+	bitset := nullBuf[:byteCount]
+	for i := range descs {
+		if IsNull(bitset, i) {
+			row[i] = nil
+		} else {
+			row[i] = DecodeColumn(r, &descs[i])
+		}
+	}
+	if r.Err() != nil {
+		return r.Err()
+	}
+	return nil
+}
+
 // EncodeParams encodes parameter values into wire format for op_execute.
 // Returns the null bitset + encoded data as a single buffer.
 // Optimized: single-pass encoding that builds null bitset and writes values.

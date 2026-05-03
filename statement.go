@@ -142,7 +142,7 @@ func (s *stmt) ExecContext(ctx context.Context, args []driver.NamedValue) (drive
 	var err error
 	if s.stmtType == wire.StmtExecProcedure {
 		outBLR := []byte{}
-		_, _, err = s.conn.wc.Execute2(s.handle, txHandle, blr, paramData, outBLR)
+		_, _, err = s.conn.wc.Execute2(s.handle, txHandle, blr, paramData, outBLR, nil)
 	} else {
 		err = s.conn.wc.Execute(s.handle, txHandle, blr, paramData)
 	}
@@ -209,8 +209,18 @@ func (s *stmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driv
 
 	outBLR := s.resultBLR()
 	var err error
+	eof := false
+	hasCursor := true
+	var initialRows [][]any
 	if s.stmtType == wire.StmtExecProcedure {
-		_, _, err = s.conn.wc.Execute2(s.handle, txHandle, blr, paramData, outBLR)
+		var msgs int32
+		var row []any
+		msgs, row, err = s.conn.wc.Execute2(s.handle, txHandle, blr, paramData, outBLR, s.outputs)
+		if msgs > 0 {
+			initialRows = [][]any{row}
+		}
+		eof = true
+		hasCursor = false
 	} else {
 		err = s.conn.wc.Execute(s.handle, txHandle, blr, paramData)
 	}
@@ -229,6 +239,9 @@ func (s *stmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driv
 		fetchSize:    s.fetchSize,
 		autoFreeStmt: false, // prepared stmt manages its own lifetime
 		autoCommitTx: autoCommit,
+		hasCursor:    hasCursor,
+		buf:          initialRows,
+		eof:          eof,
 		blr:          outBLR,
 		hasBlobs:     hasBlobs(s.outputs),
 	}, nil

@@ -1182,6 +1182,62 @@ func TestExecuteProcedure(t *testing.T) {
 	}
 }
 
+func TestExecuteProcedureReturning(t *testing.T) {
+	db := openTestDB(t)
+	db.Exec("DROP PROCEDURE TEST_RET_PROC")
+	db.Exec("DROP TABLE TEST_PROC_RET_TBL")
+	if _, err := db.Exec(`CREATE TABLE TEST_PROC_RET_TBL (ID INTEGER NOT NULL PRIMARY KEY, V INTEGER)`); err != nil {
+		t.Fatalf("CREATE TABLE: %v", err)
+	}
+	defer func() {
+		db.Exec("DROP PROCEDURE TEST_RET_PROC")
+		db.Exec("DROP TABLE TEST_PROC_RET_TBL")
+	}()
+
+	_, err := db.Exec(`
+		CREATE PROCEDURE TEST_RET_PROC (P_ID INTEGER, P_V INTEGER)
+		RETURNS (NEW_ID INTEGER, NEW_V INTEGER)
+		AS
+		BEGIN
+			INSERT INTO TEST_PROC_RET_TBL (ID, V) VALUES (:P_ID, :P_V);
+			NEW_ID = P_ID;
+			NEW_V = P_V;
+		END
+	`)
+	if err != nil {
+		t.Fatalf("CREATE PROCEDURE: %v", err)
+	}
+
+	var id, v int
+	if err := db.QueryRow("EXECUTE PROCEDURE TEST_RET_PROC(?, ?)", 1, 100).Scan(&id, &v); err != nil {
+		t.Fatalf("EXECUTE PROCEDURE query: %v", err)
+	}
+	if id != 1 || v != 100 {
+		t.Fatalf("query row = (%d, %d), want (1, 100)", id, v)
+	}
+
+	stmt, err := db.Prepare("EXECUTE PROCEDURE TEST_RET_PROC(?, ?)")
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	defer stmt.Close()
+
+	if err := stmt.QueryRow(2, 200).Scan(&id, &v); err != nil {
+		t.Fatalf("prepared EXECUTE PROCEDURE query: %v", err)
+	}
+	if id != 2 || v != 200 {
+		t.Fatalf("prepared row = (%d, %d), want (2, 200)", id, v)
+	}
+
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM TEST_PROC_RET_TBL").Scan(&count); err != nil {
+		t.Fatalf("SELECT COUNT: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("inserted rows = %d, want 2", count)
+	}
+}
+
 // --- Context Tests ---
 
 func TestContextTimeout(t *testing.T) {

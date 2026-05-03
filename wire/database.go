@@ -490,9 +490,9 @@ func (wc *WireConnection) TransactionExecuteCommit(tpb []byte, stmtHandle int32,
 	return nil
 }
 
-// Execute2 sends op_execute2 for a returning statement (EXECUTE PROCEDURE).
-// Returns the raw row data from the sql_response.
-func (wc *WireConnection) Execute2(stmtHandle, txHandle int32, inBLR, params, outBLR []byte) (int32, []byte, error) {
+// Execute2 sends op_execute2 for a singleton returning statement
+// (EXECUTE PROCEDURE). It returns the row carried by op_sql_response.
+func (wc *WireConnection) Execute2(stmtHandle, txHandle int32, inBLR, params, outBLR []byte, outputs []ColumnDescriptor) (int32, []any, error) {
 	wc.writer.WriteInt32(opExecute2)
 	wc.writer.WriteInt32(stmtHandle)
 	wc.writer.WriteInt32(txHandle)
@@ -506,16 +506,16 @@ func (wc *WireConnection) Execute2(stmtHandle, txHandle int32, inBLR, params, ou
 		wc.writer.WriteInt32(0)
 	}
 
+	// Output BLR for return values
+	wc.writer.WriteBuffer(outBLR)
+	wc.writer.WriteInt32(0) // p_sqldata_out_message_number
+
 	if wc.protocolVersion >= 16 {
 		wc.writer.WriteUInt32(0)
 	}
 	if wc.protocolVersion >= 18 {
 		wc.writer.WriteUInt32(0)
 	}
-
-	// Output BLR for return values
-	wc.writer.WriteBuffer(outBLR)
-	wc.writer.WriteInt32(0) // p_sqldata_out_message_number
 
 	if err := wc.flush(); err != nil {
 		return 0, nil, fmt.Errorf("op_execute2: flush: %w", err)
@@ -526,31 +526,56 @@ func (wc *WireConnection) Execute2(stmtHandle, txHandle int32, inBLR, params, ou
 		return 0, nil, fmt.Errorf("op_execute2: consume deferred: %w", err)
 	}
 
-	// Read op_sql_response
 	op := wc.reader.ReadOpcode()
 	if wc.reader.Err() != nil {
 		return 0, nil, fmt.Errorf("op_execute2: read opcode: %w", wc.reader.Err())
 	}
 
 	var msgs int32
-	var rowData []byte
-	if op == opSQLResponse {
+	var row []any
+	switch op {
+	case opSQLResponse:
 		sqlResp := wc.reader.readSQLResponse()
 		msgs = sqlResp.Messages
 		if msgs > 0 {
-			rowData = copyBytes(wc.reader.ReadBuffer())
+			row = make([]any, len(outputs))
+			if err := DecodeRow(wc.reader, outputs, wc.nullBuf[:], row); err != nil {
+				return msgs, nil, fmt.Errorf("op_execute2: decode row: %w", err)
+			}
 		}
 		if wc.reader.Err() != nil {
 			return 0, nil, fmt.Errorf("op_execute2: read sql_response: %w", wc.reader.Err())
 		}
-	}
 
-	// Read op_response (status)
-	_, err := wc.reader.ReadResponse() // deferred already drained above
-	if err != nil {
-		return msgs, rowData, fmt.Errorf("op_execute2: %w", err)
+		op = wc.reader.ReadOpcode()
+		if wc.reader.Err() != nil {
+			return msgs, row, fmt.Errorf("op_execute2: read response opcode: %w", wc.reader.Err())
+		}
+		if op != opResponse {
+			return msgs, row, fmt.Errorf("op_execute2: unexpected opcode %d, expected op_response (%d)", op, opResponse)
+		}
+		resp := wc.reader.readGenericResponse()
+		if wc.reader.Err() != nil {
+			return msgs, row, fmt.Errorf("op_execute2: read response: %w", wc.reader.Err())
+		}
+		if resp.Status.HasError() {
+			return msgs, row, fmt.Errorf("op_execute2: %w", &StatusError{SV: resp.Status})
+		}
+		return msgs, row, nil
+
+	case opResponse:
+		resp := wc.reader.readGenericResponse()
+		if wc.reader.Err() != nil {
+			return 0, nil, fmt.Errorf("op_execute2: read response: %w", wc.reader.Err())
+		}
+		if resp.Status.HasError() {
+			return 0, nil, fmt.Errorf("op_execute2: %w", &StatusError{SV: resp.Status})
+		}
+		return 0, nil, nil
+
+	default:
+		return 0, nil, fmt.Errorf("op_execute2: unexpected opcode %d, expected %d or %d", op, opSQLResponse, opResponse)
 	}
-	return msgs, rowData, nil
 }
 
 // Fetch sends op_fetch and reads the response sequence.
@@ -710,16 +735,8 @@ func (wc *WireConnection) FetchRowsReuse(
 		}
 		rowIdx++
 
-		readNullBitsetInto(wc.reader, numCols, wc.nullBuf[:])
-		for j := range descs {
-			if IsNull(wc.nullBuf[:], j) {
-				row[j] = nil
-			} else {
-				row[j] = DecodeColumn(wc.reader, &descs[j])
-			}
-		}
-		if wc.reader.Err() != nil {
-			return nil, allValues, false, fmt.Errorf("op_fetch: decode row: %w", wc.reader.Err())
+		if err := DecodeRow(wc.reader, descs, wc.nullBuf[:], row); err != nil {
+			return nil, allValues, false, fmt.Errorf("op_fetch: decode row: %w", err)
 		}
 
 		rows = append(rows, row)

@@ -38,3 +38,5 @@ __pycache__/
 
 # Debug
 __debug_bin*
+
+/docs
