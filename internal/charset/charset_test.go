@@ -49,3 +49,28 @@ func TestCharsetRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestDecodeISO88591(t *testing.T) {
+	got := Decode(IDISO88591, []byte{'V', 'A', 'R', 'T', 'A', 0xA0, 'C', 'R'})
+	want := "VARTA\u00a0CR"
+	if got != want {
+		t.Fatalf("Decode(ISO8859_1) = %q, want %q", got, want)
+	}
+}
+
+func TestEncodeISO88591(t *testing.T) {
+	got, err := Encode(IDISO88591, "VARTA\u00a0CR")
+	if err != nil {
+		t.Fatalf("Encode(ISO8859_1): %v", err)
+	}
+	want := "VARTA\xa0CR"
+	if got != want {
+		t.Fatalf("Encode(ISO8859_1) = % x, want % x", got, want)
+	}
+}
+
+func TestEncodeISO88591RejectsUnsupportedRune(t *testing.T) {
+	if _, err := Encode(IDISO88591, "precio €"); err == nil {
+		t.Fatal("Encode(ISO8859_1) error = nil, want unsupported rune error")
+	}
+}

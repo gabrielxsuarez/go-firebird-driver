@@ -1,5 +1,27 @@
-// Package charset provides Firebird charset ID to name mappings.
+// Package charset provides Firebird charset ID mappings and transcoding.
 package charset
+
+import (
+	"fmt"
+	"strings"
+	"unicode/utf8"
+
+	"golang.org/x/text/encoding"
+	"golang.org/x/text/encoding/charmap"
+	"golang.org/x/text/encoding/japanese"
+	"golang.org/x/text/encoding/korean"
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/encoding/traditionalchinese"
+)
+
+const (
+	IDNone       int32 = 0
+	IDOctets     int32 = 1
+	IDASCII      int32 = 2
+	IDUnicodeFSS int32 = 3
+	IDUTF8       int32 = 4
+	IDISO88591   int32 = 21
+)
 
 // CharsetName returns the IANA charset name for a Firebird charset ID.
 func CharsetName(id int32) string {
@@ -15,6 +37,163 @@ func CharsetID(name string) int32 {
 		return id
 	}
 	return 0 // NONE
+}
+
+// Decode converts text bytes from a Firebird charset to a Go UTF-8 string.
+func Decode(id int32, data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+	if isDirect(id) {
+		return string(data)
+	}
+	if id == IDISO88591 {
+		return decodeISO88591(data)
+	}
+	if enc := encodingForID(id); enc != nil {
+		if out, err := enc.NewDecoder().Bytes(data); err == nil {
+			return string(out)
+		}
+	}
+	return string(data)
+}
+
+// Encode converts a Go UTF-8 string to the requested Firebird charset.
+func Encode(id int32, s string) (string, error) {
+	if len(s) == 0 || isDirect(id) {
+		return s, nil
+	}
+	if id == IDISO88591 {
+		return encodeISO88591(s)
+	}
+	if enc := encodingForID(id); enc != nil {
+		out, err := enc.NewEncoder().String(s)
+		if err != nil {
+			return "", fmt.Errorf("charset %s: %w", CharsetName(id), err)
+		}
+		return out, nil
+	}
+	return s, nil
+}
+
+func isDirect(id int32) bool {
+	switch id {
+	case IDNone, IDOctets, IDASCII, IDUnicodeFSS, IDUTF8:
+		return true
+	default:
+		return false
+	}
+}
+
+func decodeISO88591(data []byte) string {
+	for _, b := range data {
+		if b >= utf8.RuneSelf {
+			return decodeISO88591Slow(data)
+		}
+	}
+	return string(data)
+}
+
+func decodeISO88591Slow(data []byte) string {
+	extra := 0
+	for _, b := range data {
+		if b >= utf8.RuneSelf {
+			extra++
+		}
+	}
+
+	var b strings.Builder
+	b.Grow(len(data) + extra)
+	for _, c := range data {
+		if c < utf8.RuneSelf {
+			b.WriteByte(c)
+		} else {
+			b.WriteRune(rune(c))
+		}
+	}
+	return b.String()
+}
+
+func encodeISO88591(s string) (string, error) {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return encodeISO88591Slow(s)
+		}
+	}
+	return s, nil
+}
+
+func encodeISO88591Slow(s string) (string, error) {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r > 0xFF {
+			return "", fmt.Errorf("charset ISO8859_1 cannot encode rune %U", r)
+		}
+		b.WriteByte(byte(r))
+	}
+	return b.String(), nil
+}
+
+func encodingForID(id int32) encoding.Encoding {
+	switch id {
+	case 5: // SJIS_0208
+		return japanese.ShiftJIS
+	case 6: // EUCJ_0208
+		return japanese.EUCJP
+	case 22: // ISO8859_2
+		return charmap.ISO8859_2
+	case 23: // ISO8859_3
+		return charmap.ISO8859_3
+	case 34: // ISO8859_4
+		return charmap.ISO8859_4
+	case 35: // ISO8859_5
+		return charmap.ISO8859_5
+	case 36: // ISO8859_6
+		return charmap.ISO8859_6
+	case 37: // ISO8859_7
+		return charmap.ISO8859_7
+	case 38: // ISO8859_8
+		return charmap.ISO8859_8
+	case 39: // ISO8859_9
+		return charmap.ISO8859_9
+	case 40: // ISO8859_13
+		return charmap.ISO8859_13
+	case 44: // KSC_5601
+		return korean.EUCKR
+	case 51: // WIN1250
+		return charmap.Windows1250
+	case 52: // WIN1251
+		return charmap.Windows1251
+	case 53: // WIN1252
+		return charmap.Windows1252
+	case 54: // WIN1253
+		return charmap.Windows1253
+	case 55: // WIN1254
+		return charmap.Windows1254
+	case 56: // BIG_5
+		return traditionalchinese.Big5
+	case 57: // GB_2312
+		return simplifiedchinese.HZGB2312
+	case 58: // WIN1255
+		return charmap.Windows1255
+	case 59: // WIN1256
+		return charmap.Windows1256
+	case 60: // WIN1257
+		return charmap.Windows1257
+	case 63: // KOI8R
+		return charmap.KOI8R
+	case 64: // KOI8U
+		return charmap.KOI8U
+	case 65: // WIN1258
+		return charmap.Windows1258
+	case 67: // GBK
+		return simplifiedchinese.GBK
+	case 69: // GB18030
+		return simplifiedchinese.GB18030
+	default:
+		return nil
+	}
 }
 
 var charsets = map[int32]string{

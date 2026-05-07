@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	fbcharset "github.com/gabrielxsuarez/go-firebird-driver/internal/charset"
 	"github.com/gabrielxsuarez/go-firebird-driver/internal/timezone"
 )
 
@@ -170,15 +171,14 @@ func DecodeColumn(r *Reader, desc *ColumnDescriptor) any {
 		if desc.SubType != 1 { // not OCTETS
 			result = trimRightSpaces(result)
 		}
-		return string(result)
+		return fbcharset.Decode(desc.SubType, result)
 
 	case SQLVarying:
 		data := r.ReadBuffer()
 		if r.Err() != nil {
 			return ""
 		}
-		// ReadBuffer returns slice of internal buffer; convert directly
-		return string(data)
+		return fbcharset.Decode(desc.SubType, data)
 
 	case SQLBlob:
 		blobID := r.ReadInt64()
@@ -421,6 +421,30 @@ func EncodeNamedParamsStackErr(w *StackWriter, descs []ColumnDescriptor, values 
 	return nil
 }
 
+func copyTextParam(dst []byte, desc *ColumnDescriptor, value any) error {
+	var n int
+	switch v := value.(type) {
+	case string:
+		s, err := fbcharset.Encode(desc.SubType, v)
+		if err != nil {
+			return err
+		}
+		n = copy(dst, s)
+	case []byte:
+		n = copy(dst, v)
+	default:
+		s, err := fbcharset.Encode(desc.SubType, toString(value))
+		if err != nil {
+			return err
+		}
+		n = copy(dst, s)
+	}
+	for i := n; i < len(dst); i++ {
+		dst[i] = 0x20
+	}
+	return nil
+}
+
 // encodeValueStack encodes a single value into a StackWriter.
 func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) error {
 	sqlType := desc.SQLType & ^int32(1)
@@ -490,25 +514,11 @@ func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) error {
 		length := int(desc.Length)
 		pad := (4 - length) & 3
 		if w.n+length+pad > len(w.buf) {
+			w.overflow = true
 			return nil
 		}
-		switch v := value.(type) {
-		case string:
-			n := copy(w.buf[w.n:w.n+length], v)
-			for i := n; i < length; i++ {
-				w.buf[w.n+i] = 0x20
-			}
-		case []byte:
-			n := copy(w.buf[w.n:w.n+length], v)
-			for i := n; i < length; i++ {
-				w.buf[w.n+i] = 0x20
-			}
-		default:
-			s := toString(value)
-			n := copy(w.buf[w.n:w.n+length], s)
-			for i := n; i < length; i++ {
-				w.buf[w.n+i] = 0x20
-			}
+		if err := copyTextParam(w.buf[w.n:w.n+length], desc, value); err != nil {
+			return err
 		}
 		w.n += length
 		copy(w.buf[w.n:], zeroPad[:pad])
@@ -517,11 +527,19 @@ func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) error {
 	case SQLVarying:
 		switch v := value.(type) {
 		case string:
-			w.WriteString(v)
+			s, err := fbcharset.Encode(desc.SubType, v)
+			if err != nil {
+				return err
+			}
+			w.WriteString(s)
 		case []byte:
 			w.WriteBuffer(v)
 		default:
-			w.WriteString(toString(value))
+			s, err := fbcharset.Encode(desc.SubType, toString(value))
+			if err != nil {
+				return err
+			}
+			w.WriteString(s)
 		}
 
 	case SQLBlob:
@@ -700,23 +718,8 @@ func encodeValue(w *Writer, desc *ColumnDescriptor, value any) error {
 		pad := (4 - length) & 3
 		w.grow(length + pad)
 
-		switch v := value.(type) {
-		case string:
-			n := copy(w.buf[w.n:w.n+length], v)
-			for i := n; i < length; i++ {
-				w.buf[w.n+i] = 0x20
-			}
-		case []byte:
-			n := copy(w.buf[w.n:w.n+length], v)
-			for i := n; i < length; i++ {
-				w.buf[w.n+i] = 0x20
-			}
-		default:
-			s := toString(value)
-			n := copy(w.buf[w.n:w.n+length], s)
-			for i := n; i < length; i++ {
-				w.buf[w.n+i] = 0x20
-			}
+		if err := copyTextParam(w.buf[w.n:w.n+length], desc, value); err != nil {
+			return err
 		}
 		w.n += length
 		copy(w.buf[w.n:], zeroPad[:pad])
@@ -725,11 +728,19 @@ func encodeValue(w *Writer, desc *ColumnDescriptor, value any) error {
 	case SQLVarying:
 		switch v := value.(type) {
 		case string:
-			w.WriteString(v)
+			s, err := fbcharset.Encode(desc.SubType, v)
+			if err != nil {
+				return err
+			}
+			w.WriteString(s)
 		case []byte:
 			w.WriteBuffer(v)
 		default:
-			w.WriteString(toString(value))
+			s, err := fbcharset.Encode(desc.SubType, toString(value))
+			if err != nil {
+				return err
+			}
+			w.WriteString(s)
 		}
 
 	case SQLBlob:
