@@ -143,3 +143,69 @@ func TestEncodeDecodeWindows1252Euro(t *testing.T) {
 		t.Fatalf("Decode(WIN1252) = %q, want %q", got, want)
 	}
 }
+
+func TestSupportedTranscodersRepresentativeRoundTrip(t *testing.T) {
+	tests := []struct {
+		name string
+		id   int32
+		text string
+	}{
+		{"ASCII", IDASCII, "plain ascii"},
+		{"ISO8859_1", IDISO88591, "VARTA\u00a0CR"},
+		{"ISO8859_2", 22, "Zazolc gesla jazn"},
+		{"ISO8859_5", 35, "\u041f\u0440\u0438\u0432\u0435\u0442"},
+		{"ISO8859_7", 37, "\u039a\u03b1\u03bb\u03b7\u03bc\u03ad\u03c1\u03b1"},
+		{"WIN1250", 51, "Zazolc gesla jazn"},
+		{"WIN1251", 52, "\u041f\u0440\u0438\u0432\u0435\u0442"},
+		{"WIN1252", 53, "precio 10\u20ac"},
+		{"WIN1253", 54, "\u039a\u03b1\u03bb\u03b7\u03bc\u03ad\u03c1\u03b1"},
+		{"WIN1254", 55, "\u0130stanbul \u011f\u00fc\u015f\u00f6\u00e7"},
+		{"WIN1255", 58, "\u05e9\u05dc\u05d5\u05dd"},
+		{"WIN1256", 59, "\u0633\u0644\u0627\u0645"},
+		{"WIN1257", 60, "\u0105\u010d\u0119\u0117\u012f\u0161\u0173\u016b\u017e"},
+		{"KOI8R", 63, "\u041f\u0440\u0438\u0432\u0435\u0442"},
+		{"KOI8U", 64, "\u041f\u0440\u0438\u0432\u0456\u0442"},
+		{"WIN1258", 65, "Tieng Viet"},
+		{"GBK", 67, "\u4e2d\u6587"},
+		{"GB18030", 69, "\u4e2d\u6587"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded, err := Encode(tt.id, tt.text)
+			if err != nil {
+				t.Fatalf("Encode(%s): %v", tt.name, err)
+			}
+			if got := Decode(tt.id, []byte(encoded)); got != tt.text {
+				t.Fatalf("Decode(%s) = %q, want %q", tt.name, got, tt.text)
+			}
+		})
+	}
+}
+
+func TestUnsupportedLegacyCharsetsPassThrough(t *testing.T) {
+	tests := []struct {
+		name string
+		id   int32
+	}{
+		{"DOS737", 9},
+		{"DOS437", 10},
+		{"DOS850", 11},
+		{"TIS620", 66},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const value = "abc"
+			encoded, err := Encode(tt.id, value)
+			if err != nil {
+				t.Fatalf("Encode(%s): %v", tt.name, err)
+			}
+			if encoded != value {
+				t.Fatalf("Encode(%s) = %q, want passthrough %q", tt.name, encoded, value)
+			}
+			if got := Decode(tt.id, []byte(encoded)); got != value {
+				t.Fatalf("Decode(%s) = %q, want passthrough %q", tt.name, got, value)
+			}
+		})
+	}
+}

@@ -117,6 +117,24 @@ Main parameters:
 - `role`
 - `wire_crypt` (`enabled` by default)
 - `fetch_size` (`200` by default)
+- `data_type_bind` / `dataTypeBind` / `set_bind` for Firebird 4+ `isc_dpb_set_bind`
+- `session_time_zone` / `sessionTimeZone` / `timezone` for Firebird 4+ session time zone
+
+See [COMPATIBILITY.md](COMPATIBILITY.md) for the current compatibility contract, type behavior, charset behavior, and known limitations.
+
+## Validation
+
+The repository includes a PowerShell validation script for the normal stability workflow:
+
+```powershell
+$env:FB3_TEST_DSN='firebird://sysdba:masterkey@127.0.0.1:3050/C:/AlfaBeta/firebird/tmp/go_firebird_driver_test.fdb'
+.\scripts\validate.ps1 -Mode quick
+.\scripts\validate.ps1 -Mode race
+.\scripts\validate.ps1 -Mode fuzz -FuzzSeconds 30
+.\scripts\validate.ps1 -Mode bench -BenchCount 5
+```
+
+See [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for the release-candidate checklist and longer manual tests.
 
 ## Requirements
 
