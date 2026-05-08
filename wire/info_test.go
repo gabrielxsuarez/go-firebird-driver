@@ -43,6 +43,45 @@ func TestParseRecordCounts(t *testing.T) {
 	}
 }
 
+func TestParseSQLDescribeInfoIgnoresOutOfRangeSequence(t *testing.T) {
+	data := []byte{
+		IscInfoSQLSelect,
+		IscInfoSQLSQLDASeq, 4, 0, 0xff, 0xff, 0xff, 0x7f,
+		IscInfoSQLType, 2, 0, byte(SQLLong & 0xff), byte(SQLLong >> 8),
+		IscInfoSQLDescribeEnd,
+		IscInfoEnd,
+	}
+
+	_, outputs, inputs := ParseSQLDescribeInfo(data)
+
+	if len(outputs) != 0 {
+		t.Fatalf("outputs len = %d, want 0 for out-of-range sequence", len(outputs))
+	}
+	if len(inputs) != 0 {
+		t.Fatalf("inputs len = %d, want 0", len(inputs))
+	}
+}
+
+func TestParseSQLDescribeInfoIgnoresSequenceBeyondNumVariables(t *testing.T) {
+	data := []byte{
+		IscInfoSQLSelect,
+		IscInfoSQLNumVariables, 1, 0, 1,
+		IscInfoSQLSQLDASeq, 1, 0, 2,
+		IscInfoSQLType, 2, 0, byte(SQLLong & 0xff), byte(SQLLong >> 8),
+		IscInfoSQLDescribeEnd,
+		IscInfoEnd,
+	}
+
+	_, outputs, inputs := ParseSQLDescribeInfo(data)
+
+	if len(outputs) != 0 {
+		t.Fatalf("outputs len = %d, want 0 for sequence beyond num variables", len(outputs))
+	}
+	if len(inputs) != 0 {
+		t.Fatalf("inputs len = %d, want 0", len(inputs))
+	}
+}
+
 func TestEncodeNamedParamsMatchesEncodeParams(t *testing.T) {
 	descs := []ColumnDescriptor{
 		{SQLType: SQLLong, Length: 4},

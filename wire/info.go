@@ -2,6 +2,8 @@ package wire
 
 import "encoding/binary"
 
+const maxSQLDescribeColumns = 4096
+
 // Info item constants for database, transaction, SQL, and BLOB info requests.
 const (
 	// Database info items
@@ -239,15 +241,19 @@ func ParseSQLDescribeInfo(buf []byte) (stmtType int32, outputs []ColumnDescripto
 			stmtType = readInfoInt32LE(data)
 
 		case IscInfoSQLNumVariables:
-			numVars = int(readInfoInt32LE(data))
-			if currentList != nil && cap(*currentList) < numVars {
+			numVars = describeCount(readInfoInt32LE(data))
+			if currentList != nil && numVars > 0 && cap(*currentList) < numVars {
 				*currentList = make([]ColumnDescriptor, 0, numVars)
 			}
 
 		case IscInfoSQLSQLDASeq:
 			if currentList != nil {
-				seq := int(readInfoInt32LE(data))
+				seq := describeCount(readInfoInt32LE(data))
 				if seq > 0 {
+					if numVars > 0 && seq > numVars {
+						current = nil
+						continue
+					}
 					for len(*currentList) < seq {
 						*currentList = append(*currentList, ColumnDescriptor{})
 					}
@@ -296,6 +302,13 @@ func ParseSQLDescribeInfo(buf []byte) (stmtType int32, outputs []ColumnDescripto
 		}
 	}
 	return stmtType, outputs, inputs
+}
+
+func describeCount(v int32) int {
+	if v <= 0 || v > maxSQLDescribeColumns {
+		return 0
+	}
+	return int(v)
 }
 
 // ColumnDescriptor describes a column or parameter from SQL statement metadata.
