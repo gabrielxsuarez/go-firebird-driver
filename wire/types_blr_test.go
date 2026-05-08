@@ -1,6 +1,7 @@
 package wire
 
 import (
+	"bytes"
 	"testing"
 	"time"
 )
@@ -130,6 +131,39 @@ func TestTimestampToTime(t *testing.T) {
 	}
 }
 
+func TestTimestampTZExToTimeUsesExplicitOffset(t *testing.T) {
+	mjd := DateToMJD(time.Date(2024, 6, 15, 0, 0, 0, 0, time.UTC))
+	ticks := TimeToTicks(time.Date(0, 1, 1, 18, 30, 0, 0, time.UTC))
+
+	got := TimestampTZExToTime(mjd, ticks, 64909, -240)
+	if got.Hour() != 14 || got.Minute() != 30 {
+		t.Fatalf("clock = %02d:%02d, want 14:30", got.Hour(), got.Minute())
+	}
+	if name := got.Location().String(); name != "-04:00" {
+		t.Fatalf("location = %q, want -04:00", name)
+	}
+	_, offset := got.Zone()
+	if offset != -4*60*60 {
+		t.Fatalf("offset = %d, want %d", offset, -4*60*60)
+	}
+}
+
+func TestTimeTZExToTimeUsesExplicitOffset(t *testing.T) {
+	ticks := TimeToTicks(time.Date(0, 1, 1, 19, 30, 0, 0, time.UTC))
+
+	got := TimeTZExToTime(ticks, 64909, -300)
+	if got.Hour() != 14 || got.Minute() != 30 {
+		t.Fatalf("clock = %02d:%02d, want 14:30", got.Hour(), got.Minute())
+	}
+	if name := got.Location().String(); name != "-05:00" {
+		t.Fatalf("location = %q, want -05:00", name)
+	}
+	_, offset := got.Zone()
+	if offset != -5*60*60 {
+		t.Fatalf("offset = %d, want %d", offset, -5*60*60)
+	}
+}
+
 func TestIOLength(t *testing.T) {
 	tests := []struct {
 		sqlType int32
@@ -155,6 +189,37 @@ func TestIOLength(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("IOLength(%d, %d) = %d, want %d", tt.sqlType, tt.length, got, tt.want)
 		}
+	}
+}
+
+func TestBuildBLRUsesExtendedTimeZoneTypes(t *testing.T) {
+	blr := BuildBLR([]ColumnDescriptor{
+		{SQLType: SQLTimestampTZ},
+		{SQLType: SQLTimeTZ},
+	})
+
+	if !bytes.Contains(blr, []byte{BlrExTimestampTZ}) {
+		t.Fatalf("BLR missing blr_ex_timestamp_tz: %v", blr)
+	}
+	if !bytes.Contains(blr, []byte{BlrExTimeTZ}) {
+		t.Fatalf("BLR missing blr_ex_time_tz: %v", blr)
+	}
+	if bytes.Contains(blr, []byte{BlrTimestampTZ}) || bytes.Contains(blr, []byte{BlrSQLTimeTZ}) {
+		t.Fatalf("BLR should use extended timezone types, got %v", blr)
+	}
+}
+
+func TestBuildParamBLRSendsDecfloatAsText(t *testing.T) {
+	blr := BuildParamBLR([]ColumnDescriptor{
+		{SQLType: SQLDec16},
+		{SQLType: SQLDec34},
+	})
+
+	if bytes.Contains(blr, []byte{BlrDec64}) || bytes.Contains(blr, []byte{BlrDec128}) {
+		t.Fatalf("parameter BLR should not request binary DECFLOAT encoding: %v", blr)
+	}
+	if got := bytes.Count(blr, []byte{BlrVarying2}); got != 2 {
+		t.Fatalf("parameter BLR varying count = %d, want 2: %v", got, blr)
 	}
 }
 

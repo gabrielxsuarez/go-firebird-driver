@@ -1,6 +1,7 @@
 package firebird
 
 import (
+	"context"
 	"database/sql/driver"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 // rows implements driver.Rows and all optional metadata interfaces.
 type rows struct {
 	conn         *conn
+	ctx          context.Context
 	stmtHandle   int32
 	txHandle     int32
 	outputs      []wire.ColumnDescriptor
@@ -92,13 +94,17 @@ func (r *rows) Close() error {
 		return nil
 	}
 
+	var err error
 	if r.autoFreeStmt {
-		_ = r.conn.handleFatalErrorLocked(r.conn.wc.RecycleStatement(r.stmtHandle, r.hasCursor))
+		err = r.conn.handleFatalErrorLocked(r.conn.wc.RecycleStatement(r.stmtHandle, r.hasCursor))
 	} else if r.hasCursor {
 		// Close cursor but keep statement
-		_ = r.conn.handleFatalErrorLocked(r.conn.wc.FreeStatement(r.stmtHandle, wire.DSQLClose))
+		err = r.conn.handleFatalErrorLocked(r.conn.wc.FreeStatement(r.stmtHandle, wire.DSQLClose))
 	}
 	r.conn.mu.Unlock()
+	if err != nil {
+		return err
+	}
 	if r.autoCommitTx {
 		// Persistent auto-tx: no commit needed, tx stays alive for reuse.
 		// Data is already visible since we use READ COMMITTED.
@@ -111,6 +117,9 @@ func (r *rows) Close() error {
 func (r *rows) Next(dest []driver.Value) error {
 	if r.closed {
 		return io.EOF
+	}
+	if err := r.contextErr(); err != nil {
+		return err
 	}
 
 	// Need more data?
@@ -138,6 +147,9 @@ func (r *rows) Next(dest []driver.Value) error {
 }
 
 func (r *rows) fetch() error {
+	if err := r.contextErr(); err != nil {
+		return err
+	}
 	// Cache BLR on first fetch to avoid rebuilding on subsequent fetches
 	if r.blr == nil {
 		r.blr = wire.AppendBLR(r.inlineBLR[:0], r.outputs)
@@ -149,6 +161,11 @@ func (r *rows) fetch() error {
 	}
 
 	r.conn.mu.Lock()
+	if err := r.contextErr(); err != nil {
+		r.conn.mu.Unlock()
+		return err
+	}
+	stop := r.conn.withCancel(r.ctx)
 
 	fetched, values, eof, err := r.conn.wc.FetchRowsReuse(
 		r.stmtHandle,
@@ -158,9 +175,15 @@ func (r *rows) fetch() error {
 		r.fetchRows,
 		r.fetchValues,
 	)
+	stop()
 	if err != nil {
+		ctxErr := r.contextErr()
+		handled := r.conn.handleFatalErrorLocked(err)
 		r.conn.mu.Unlock()
-		return r.conn.handleFatalErrorLocked(err)
+		if ctxErr != nil {
+			return ctxErr
+		}
+		return handled
 	}
 	r.fetchRows = fetched[:0]
 	r.fetchValues = values
@@ -201,6 +224,13 @@ func (r *rows) fetch() error {
 	}
 
 	return nil
+}
+
+func (r *rows) contextErr() error {
+	if r.ctx == nil {
+		return nil
+	}
+	return r.ctx.Err()
 }
 
 // hasBlobs returns true if any column is a BLOB type.
@@ -257,9 +287,9 @@ func (r *rows) ColumnTypeDatabaseTypeName(index int) string {
 		return "DATE"
 	case wire.SQLTypeTime:
 		return "TIME"
-	case wire.SQLTimestampTZ:
+	case wire.SQLTimestampTZ, wire.SQLTimestampTZEx:
 		return "TIMESTAMP WITH TIME ZONE"
-	case wire.SQLTimeTZ:
+	case wire.SQLTimeTZ, wire.SQLTimeTZEx:
 		return "TIME WITH TIME ZONE"
 	case wire.SQLBlob:
 		if col.SubType == 1 {
@@ -352,12 +382,14 @@ func (r *rows) ColumnTypeScanType(index int) reflect.Type {
 			return reflect.TypeOf(float64(0))
 		}
 		return reflect.TypeOf(int64(0))
+	case wire.SQLInt128, wire.SQLDec16, wire.SQLDec34:
+		return reflect.TypeOf("")
 	case wire.SQLFloat:
 		return reflect.TypeOf(float32(0))
 	case wire.SQLDouble:
 		return reflect.TypeOf(float64(0))
 	case wire.SQLTimestamp, wire.SQLTypeDate, wire.SQLTypeTime,
-		wire.SQLTimestampTZ, wire.SQLTimeTZ:
+		wire.SQLTimestampTZ, wire.SQLTimeTZ, wire.SQLTimestampTZEx, wire.SQLTimeTZEx:
 		return reflect.TypeOf(time.Time{})
 	case wire.SQLBlob:
 		if col.SubType == 1 {

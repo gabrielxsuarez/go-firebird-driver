@@ -26,6 +26,11 @@ const (
 
 var errInvalidDecimal = errors.New("invalid decimal value")
 
+var (
+	decfloat64DPDMask  = mustBigIntFromHex("3ffffffffffff")
+	decfloat128DPDMask = mustBigIntFromHex("3fffffffffffffffffffffffffff")
+)
+
 // Modified Julian Date epoch: November 17, 1858.
 var mjdEpoch = time.Date(1858, 11, 17, 0, 0, 0, 0, time.UTC)
 
@@ -81,11 +86,55 @@ func TimestampTZToTime(mjd int32, ticks uint32, tzValue uint32) time.Time {
 	return utcTime.In(loc)
 }
 
+// TimestampTZExToTime converts date + time + timezone value + explicit offset
+// to time.Time. The explicit offset is authoritative for the returned value, so
+// a Go tzdata version mismatch cannot shift the decoded wall clock.
+func TimestampTZExToTime(mjd int32, ticks uint32, tzValue uint32, offsetMinutes int32) time.Time {
+	utcTime := TimestampToTime(mjd, ticks)
+	loc := fixedLocationForTZ(tzValue, offsetMinutes)
+	return utcTime.In(loc)
+}
+
 // TimeTZToTime converts UTC time ticks + timezone value to time.Time.
 func TimeTZToTime(ticks uint32, tzValue uint32) time.Time {
 	t := TicksToTime(ticks)
 	loc := timezone.Resolve(tzValue)
 	return t.In(loc)
+}
+
+// TimeTZExToTime converts UTC time ticks + timezone value + explicit offset to
+// time.Time. TIME WITH TIME ZONE has no date, so using the explicit Firebird
+// offset avoids historical IANA rules for year zero.
+func TimeTZExToTime(ticks uint32, tzValue uint32, offsetMinutes int32) time.Time {
+	t := TicksToTime(ticks)
+	loc := fixedLocationForTZ(tzValue, offsetMinutes)
+	return t.In(loc)
+}
+
+func fixedLocationForTZ(tzValue uint32, offsetMinutes int32) *time.Location {
+	loc := timezone.Resolve(tzValue)
+	name := loc.String()
+	if name == "UTC" && offsetMinutes != 0 {
+		name = offsetLocationName(offsetMinutes)
+	}
+	return time.FixedZone(name, int(offsetMinutes)*60)
+}
+
+func timezoneParts(t time.Time) (utc time.Time, offsetSeconds int, offsetMinutes int32) {
+	_, offsetSeconds = t.Zone()
+	return t.UTC(), offsetSeconds, int32(offsetSeconds / 60)
+}
+
+func offsetLocationName(minutes int32) string {
+	sign := byte('+')
+	if minutes < 0 {
+		sign = '-'
+		minutes = -minutes
+	}
+	h := minutes / 60
+	m := minutes % 60
+	buf := [6]byte{sign, byte('0' + h/10), byte('0' + h%10), ':', byte('0' + m/10), byte('0' + m%10)}
+	return string(buf[:])
 }
 
 // --- Row data decoding ---
@@ -146,16 +195,18 @@ func DecodeColumn(r *Reader, desc *ColumnDescriptor) any {
 		ticks := r.ReadUInt32()
 		return TimestampToTime(mjd, ticks)
 
-	case SQLTimeTZ:
+	case SQLTimeTZ, SQLTimeTZEx:
 		ticks := r.ReadUInt32()
 		tz := r.ReadUInt32()
-		return TimeTZToTime(ticks, tz)
+		offsetMinutes := r.ReadInt32()
+		return TimeTZExToTime(ticks, tz, offsetMinutes)
 
-	case SQLTimestampTZ:
+	case SQLTimestampTZ, SQLTimestampTZEx:
 		mjd := r.ReadInt32()
 		ticks := r.ReadUInt32()
 		tz := r.ReadUInt32()
-		return TimestampTZToTime(mjd, ticks, tz)
+		offsetMinutes := r.ReadInt32()
+		return TimestampTZExToTime(mjd, ticks, tz, offsetMinutes)
 
 	case SQLText:
 		length := int(desc.Length)
@@ -569,24 +620,10 @@ func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) error {
 		w.WriteInt64(v)
 
 	case SQLDec16:
-		s := toString(value)
-		data := stringToDecfloat64(s)
-		if w.n+8 > len(w.buf) {
-			w.overflow = true
-			return nil
-		}
-		copy(w.buf[w.n:], data[:])
-		w.n += 8
+		w.WriteString(toString(value))
 
 	case SQLDec34:
-		s := toString(value)
-		data := stringToDecfloat128(s)
-		if w.n+16 > len(w.buf) {
-			w.overflow = true
-			return nil
-		}
-		copy(w.buf[w.n:], data[:])
-		w.n += 16
+		w.WriteString(toString(value))
 
 	case SQLInt128:
 		data, err := valueToInt128(value, desc.Scale)
@@ -600,18 +637,18 @@ func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) error {
 		copy(w.buf[w.n:], data[:])
 		w.n += 16
 
-	case SQLTimestampTZ:
-		t := toTime(value)
-		w.WriteInt32(DateToMJD(t))
-		w.WriteUInt32(TimeToTicks(t))
-		_, offset := t.Zone()
+	case SQLTimestampTZ, SQLTimestampTZEx:
+		utc, offset, offsetMinutes := timezoneParts(toTime(value))
+		w.WriteInt32(DateToMJD(utc))
+		w.WriteUInt32(TimeToTicks(utc))
 		w.WriteUInt32(tzOffsetToID(offset))
+		w.WriteInt32(offsetMinutes)
 
-	case SQLTimeTZ:
-		t := toTime(value)
-		w.WriteUInt32(TimeToTicks(t))
-		_, offset := t.Zone()
+	case SQLTimeTZ, SQLTimeTZEx:
+		utc, offset, offsetMinutes := timezoneParts(toTime(value))
+		w.WriteUInt32(TimeToTicks(utc))
 		w.WriteUInt32(tzOffsetToID(offset))
+		w.WriteInt32(offsetMinutes)
 
 	default:
 		// Fallback: write as string
@@ -636,11 +673,14 @@ func estimateValueSize(desc *ColumnDescriptor, value any) int {
 		return 4
 	case SQLDouble, SQLTimestamp, SQLBlob, SQLInt64:
 		return 8
-	case SQLTimestampTZ, SQLTimeTZ:
+	case SQLTimeTZ, SQLTimeTZEx:
 		return 12
-	case SQLDec16:
-		return 8
-	case SQLDec34, SQLInt128:
+	case SQLTimestampTZ, SQLTimestampTZEx:
+		return 16
+	case SQLDec16, SQLDec34:
+		s := toString(value)
+		return 4 + len(s) + ((4 - len(s)) & 3)
+	case SQLInt128:
 		return 16
 	case SQLText:
 		return int(desc.Length) + ((4 - int(desc.Length)) & 3) // padded
@@ -771,18 +811,10 @@ func encodeValue(w *Writer, desc *ColumnDescriptor, value any) error {
 		w.WriteInt64(v)
 
 	case SQLDec16:
-		s := toString(value)
-		data := stringToDecfloat64(s)
-		w.grow(8)
-		copy(w.buf[w.n:], data[:])
-		w.n += 8
+		w.WriteString(toString(value))
 
 	case SQLDec34:
-		s := toString(value)
-		data := stringToDecfloat128(s)
-		w.grow(16)
-		copy(w.buf[w.n:], data[:])
-		w.n += 16
+		w.WriteString(toString(value))
 
 	case SQLInt128:
 		data, err := valueToInt128(value, desc.Scale)
@@ -793,18 +825,18 @@ func encodeValue(w *Writer, desc *ColumnDescriptor, value any) error {
 		copy(w.buf[w.n:], data[:])
 		w.n += 16
 
-	case SQLTimestampTZ:
-		t := toTime(value)
-		w.WriteInt32(DateToMJD(t))
-		w.WriteUInt32(TimeToTicks(t))
-		_, offset := t.Zone()
+	case SQLTimestampTZ, SQLTimestampTZEx:
+		utc, offset, offsetMinutes := timezoneParts(toTime(value))
+		w.WriteInt32(DateToMJD(utc))
+		w.WriteUInt32(TimeToTicks(utc))
 		w.WriteUInt32(tzOffsetToID(offset))
+		w.WriteInt32(offsetMinutes)
 
-	case SQLTimeTZ:
-		t := toTime(value)
-		w.WriteUInt32(TimeToTicks(t))
-		_, offset := t.Zone()
+	case SQLTimeTZ, SQLTimeTZEx:
+		utc, offset, offsetMinutes := timezoneParts(toTime(value))
+		w.WriteUInt32(TimeToTicks(utc))
 		w.WriteUInt32(tzOffsetToID(offset))
+		w.WriteInt32(offsetMinutes)
 
 	default:
 		// Fallback: write as string
@@ -1292,112 +1324,265 @@ func dpdToDigits(dpd uint32) (d0, d1, d2 uint8) {
 
 // decfloat64ToString converts a decimal64 value to string.
 func decfloat64ToString(bits uint64) string {
-	sign := bits >> 63
-	combo := (bits >> 50) & 0x1FFF
-
-	// Special values: top 5 bits of combo (combo >> 8)
-	// 11110 = Infinity (0x1E00-0x1EFF), 11111 = NaN (0x1F00-0x1FFF)
-	if combo >= 0x1E00 {
-		if combo >= 0x1F00 {
-			return "NaN"
-		}
-		if sign != 0 {
-			return "-Infinity"
-		}
-		return "Infinity"
-	}
-
-	// Extract exponent and leading digit
-	var exp int
-	var leadDigit uint8
-	trailing := bits & 0x3FFFFFFFFFFFF // 50 bits
-
-	if combo>>11 == 0x03 {
-		// Large coefficient: bits [12:11] = 11
-		exp = int((combo>>1)&0x3FF) - 398
-		leadDigit = uint8(8 + (combo & 1))
-	} else {
-		exp = int((combo>>3)&0x3FF) - 398
-		leadDigit = uint8((combo >> 0) & 7)
-	}
-
-	// Decode 5 DPD declets (50 bits → 15 digits) from trailing significand
-	var digits [16]byte
-	digits[0] = '0' + leadDigit
-	for i := 0; i < 5; i++ {
-		shift := uint(40 - i*10)
-		dpd := uint32((trailing >> shift) & 0x3FF)
-		d0, d1, d2 := dpdToDigits(dpd)
-		digits[1+i*3] = '0' + d0
-		digits[2+i*3] = '0' + d1
-		digits[3+i*3] = '0' + d2
-	}
-
-	return formatDecfloat(digits[:16], exp, sign != 0)
+	var data [8]byte
+	binary.BigEndian.PutUint64(data[:], bits)
+	return decfloat64BytesToString(data[:])
 }
 
 // decfloat128ToString converts a decimal128 value to string.
 func decfloat128ToString(hi, lo uint64) string {
-	sign := hi >> 63
-	combo := (hi >> 46) & 0x1FFFF
+	var data [16]byte
+	binary.BigEndian.PutUint64(data[:8], hi)
+	binary.BigEndian.PutUint64(data[8:], lo)
+	return decfloat128BytesToString(data[:])
+}
 
-	// Special values: top 5 bits of combo (combo >> 12)
-	// 11110 = Infinity (0x1E000-0x1EFFF), 11111 = NaN (0x1F000-0x1FFFF)
-	if combo >= 0x1E000 {
-		if combo >= 0x1F000 {
-			return "NaN"
-		}
-		if sign != 0 {
+func decfloat64BytesToString(data []byte) string {
+	if len(data) < 8 {
+		return ""
+	}
+	sign := data[0]&0x80 != 0
+	cf := (uint32(data[0]) >> 2) & 0x1f
+	exponent := ((int32(data[0]) & 3) << 6) + ((int32(data[1]) >> 2) & 0x3f)
+
+	dpdBits := new(big.Int).SetBytes(data[:8])
+	dpdBits.And(dpdBits, decfloat64DPDMask)
+
+	var prefix int64
+	switch {
+	case cf == 0x1f:
+		return "NaN"
+	case cf == 0x1e:
+		if sign {
 			return "-Infinity"
 		}
 		return "Infinity"
+	case cf&0x18 == 0x00:
+		prefix = int64(cf & 0x07)
+	case cf&0x18 == 0x08:
+		exponent += 0x100
+		prefix = int64(cf & 0x07)
+	case cf&0x18 == 0x10:
+		exponent += 0x200
+		prefix = int64(cf & 0x07)
+	case cf&0x1e == 0x18:
+		prefix = int64(8 + cf&1)
+	case cf&0x1e == 0x1a:
+		exponent += 0x100
+		prefix = int64(8 + cf&1)
+	case cf&0x1e == 0x1c:
+		exponent += 0x200
+		prefix = int64(8 + cf&1)
+	default:
+		return ""
 	}
+	exponent -= 398
 
-	var exp int
-	var leadDigit uint8
-	trailingHi := hi & 0x3FFFFFFFFFFF // 46 bits from hi
-
-	if combo>>15 == 0x03 {
-		exp = int((combo>>1)&0x3FFF) - 6176
-		leadDigit = uint8(8 + (combo & 1))
-	} else {
-		exp = int((combo>>3)&0x3FFF) - 6176
-		leadDigit = uint8(combo & 7)
+	digits, ok := calcDPDSignificand(prefix, dpdBits, 50)
+	if !ok {
+		return ""
 	}
+	return formatDecimalCoefficient(digits, exponent, sign)
+}
 
-	// Combine trailing: 46 bits from hi + 64 bits from lo = 110 bits
-	// Contains 11 DPD declets (33 digits)
-	var digits [34]byte
-	digits[0] = '0' + leadDigit
+func decfloat128BytesToString(data []byte) string {
+	if len(data) < 16 {
+		return ""
+	}
+	sign := data[0]&0x80 != 0
+	cf := (uint32(data[0]&0x7f) << 10) + (uint32(data[1]) << 2) + uint32(data[2]>>6)
 
-	// Extract 11 DPD declets from 110 trailing bits
-	// Declet 0-3 from trailingHi, declet 4 spans hi/lo, declet 5-10 from lo
-	for i := 0; i < 11; i++ {
-		var dpd uint32
-		bitPos := 100 - i*10 // bit position counting from LSB of the 110-bit field
-		if bitPos >= 64 {
-			// Entirely in trailingHi
-			shift := uint(bitPos - 64)
-			dpd = uint32((trailingHi >> shift) & 0x3FF)
-		} else if bitPos+10 > 64 {
-			// Spans hi and lo
-			loBits := 64 - bitPos
-			hiPart := trailingHi & ((1 << uint(10-loBits)) - 1)
-			loPart := lo >> uint(64-loBits)
-			dpd = uint32((hiPart << uint(loBits)) | loPart)
-			dpd &= 0x3FF
-		} else {
-			// Entirely in lo
-			shift := uint(bitPos)
-			dpd = uint32((lo >> shift) & 0x3FF)
+	var prefix int64
+	var exponent int32
+	switch {
+	case cf&0x1f000 == 0x1f000:
+		return "NaN"
+	case cf&0x1f000 == 0x1e000:
+		if sign {
+			return "-Infinity"
 		}
-		d0, d1, d2 := dpdToDigits(dpd)
-		digits[1+i*3] = '0' + d0
-		digits[2+i*3] = '0' + d1
-		digits[3+i*3] = '0' + d2
+		return "Infinity"
+	case cf&0x18000 == 0x00000:
+		exponent = int32(cf & 0x00fff)
+		prefix = int64((cf >> 12) & 0x07)
+	case cf&0x18000 == 0x08000:
+		exponent = 0x1000 + int32(cf&0x00fff)
+		prefix = int64((cf >> 12) & 0x07)
+	case cf&0x18000 == 0x10000:
+		exponent = 0x2000 + int32(cf&0x00fff)
+		prefix = int64((cf >> 12) & 0x07)
+	case cf&0x1e000 == 0x18000:
+		exponent = int32(cf & 0x00fff)
+		prefix = int64(8 + (cf>>12)&0x01)
+	case cf&0x1e000 == 0x1a000:
+		exponent = 0x1000 + int32(cf&0x00fff)
+		prefix = int64(8 + (cf>>12)&0x01)
+	case cf&0x1e000 == 0x1c000:
+		exponent = 0x2000 + int32(cf&0x00fff)
+		prefix = int64(8 + (cf>>12)&0x01)
+	default:
+		return ""
+	}
+	exponent -= 6176
+
+	dpdBits := new(big.Int).SetBytes(data[:16])
+	dpdBits.And(dpdBits, decfloat128DPDMask)
+	digits, ok := calcDPDSignificand(prefix, dpdBits, 110)
+	if !ok {
+		return ""
+	}
+	return formatDecimalCoefficient(digits, exponent, sign)
+}
+
+func calcDPDSignificand(prefix int64, dpdBits *big.Int, numBits int) (*big.Int, bool) {
+	result := big.NewInt(prefix)
+	chunk := new(big.Int)
+	divisor := big.NewInt(1024)
+	thousand := big.NewInt(1000)
+	segments := numBits / 10
+	values := make([]int64, segments)
+
+	for i := segments - 1; i >= 0; i-- {
+		chunk.Mod(dpdBits, divisor)
+		v, ok := dpdToInt(uint32(chunk.Uint64()))
+		if !ok {
+			return nil, false
+		}
+		values[i] = v
+		dpdBits.Rsh(dpdBits, 10)
+	}
+	for _, v := range values {
+		result.Mul(result, thousand)
+		result.Add(result, big.NewInt(v))
+	}
+	return result, true
+}
+
+func dpdToInt(dpd uint32) (int64, bool) {
+	b0 := dpdBit(dpd, 0x0001)
+	b1 := dpdBit(dpd, 0x0002)
+	b2 := dpdBit(dpd, 0x0004)
+	b3 := dpdBit(dpd, 0x0008)
+	b4 := dpdBit(dpd, 0x0010)
+	b5 := dpdBit(dpd, 0x0020)
+	b6 := dpdBit(dpd, 0x0040)
+	b7 := dpdBit(dpd, 0x0080)
+	b8 := dpdBit(dpd, 0x0100)
+	b9 := dpdBit(dpd, 0x0200)
+
+	var d0, d1, d2 int
+	switch {
+	case b3 == 0:
+		d2 = b9*4 + b8*2 + b7
+		d1 = b6*4 + b5*2 + b4
+		d0 = b2*4 + b1*2 + b0
+	case b3 == 1 && b2 == 0 && b1 == 0:
+		d2 = b9*4 + b8*2 + b7
+		d1 = b6*4 + b5*2 + b4
+		d0 = 8 + b0
+	case b3 == 1 && b2 == 0 && b1 == 1:
+		d2 = b9*4 + b8*2 + b7
+		d1 = 8 + b4
+		d0 = b6*4 + b5*2 + b0
+	case b3 == 1 && b2 == 1 && b1 == 0:
+		d2 = 8 + b7
+		d1 = b6*4 + b5*2 + b4
+		d0 = b9*4 + b8*2 + b0
+	case b6 == 0 && b5 == 0 && b3 == 1 && b2 == 1 && b1 == 1:
+		d2 = 8 + b7
+		d1 = 8 + b4
+		d0 = b9*4 + b8*2 + b0
+	case b6 == 0 && b5 == 1 && b3 == 1 && b2 == 1 && b1 == 1:
+		d2 = 8 + b7
+		d1 = b9*4 + b8*2 + b4
+		d0 = 8 + b0
+	case b6 == 1 && b5 == 0 && b3 == 1 && b2 == 1 && b1 == 1:
+		d2 = b9*4 + b8*2 + b7
+		d1 = 8 + b4
+		d0 = 8 + b0
+	case b6 == 1 && b5 == 1 && b3 == 1 && b2 == 1 && b1 == 1:
+		d2 = 8 + b7
+		d1 = 8 + b4
+		d0 = 8 + b0
+	default:
+		return 0, false
+	}
+	return int64(d2*100 + d1*10 + d0), true
+}
+
+func dpdBit(dpd, mask uint32) int {
+	if dpd&mask != 0 {
+		return 1
+	}
+	return 0
+}
+
+func mustBigIntFromHex(s string) *big.Int {
+	v, ok := new(big.Int).SetString(s, 16)
+	if !ok {
+		panic("invalid hex big.Int constant")
+	}
+	return v
+}
+
+func formatDecimalCoefficient(digits *big.Int, exponent int32, negative bool) string {
+	if digits.Sign() == 0 {
+		if negative {
+			return "-0"
+		}
+		return "0"
+	}
+	coeff := digits.String()
+	adjExp := int(exponent) + len(coeff) - 1
+
+	var buf []byte
+	if negative {
+		buf = append(buf, '-')
+	}
+	if adjExp < -6 || adjExp > len(coeff)+2 {
+		buf = append(buf, coeff[0])
+		if len(coeff) > 1 {
+			buf = append(buf, '.')
+			buf = append(buf, coeff[1:]...)
+			for len(buf) > 0 && buf[len(buf)-1] == '0' {
+				buf = buf[:len(buf)-1]
+			}
+			if buf[len(buf)-1] == '.' {
+				buf = buf[:len(buf)-1]
+			}
+		}
+		buf = append(buf, 'E')
+		if adjExp >= 0 {
+			buf = append(buf, '+')
+		}
+		buf = strconv.AppendInt(buf, int64(adjExp), 10)
+		return string(buf)
 	}
 
-	return formatDecfloat(digits[:34], exp, sign != 0)
+	dotPos := len(coeff) + int(exponent)
+	switch {
+	case dotPos <= 0:
+		buf = append(buf, '0', '.')
+		for range -dotPos {
+			buf = append(buf, '0')
+		}
+		buf = append(buf, coeff...)
+	case dotPos >= len(coeff):
+		buf = append(buf, coeff...)
+		for range dotPos - len(coeff) {
+			buf = append(buf, '0')
+		}
+	default:
+		buf = append(buf, coeff[:dotPos]...)
+		buf = append(buf, '.')
+		buf = append(buf, coeff[dotPos:]...)
+	}
+	result := string(buf)
+	if strings.Contains(result, ".") {
+		result = strings.TrimRight(result, "0")
+		result = strings.TrimRight(result, ".")
+	}
+	return result
 }
 
 // formatDecfloat formats coefficient digits with exponent into a string.

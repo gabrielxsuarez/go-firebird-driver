@@ -48,7 +48,20 @@ func TestISO88591CharsetRoundTrip(t *testing.T) {
 
 func TestCharsetRoundTripMatrix(t *testing.T) {
 	db := openTestDB(t)
+	runCharsetRoundTripMatrix(t, db)
+}
 
+func TestCharsetRoundTripMatrixFirebirdVersions(t *testing.T) {
+	for _, version := range testDBVersions() {
+		t.Run(version.name, func(t *testing.T) {
+			db := openVersionedTestDB(t, version)
+			runCharsetRoundTripMatrix(t, db)
+		})
+	}
+}
+
+func runCharsetRoundTripMatrix(t *testing.T, db *sql.DB) {
+	t.Helper()
 	tests := []struct {
 		name    string
 		charset string
@@ -62,6 +75,18 @@ func TestCharsetRoundTripMatrix(t *testing.T) {
 			fixed:   "A\u00a0",
 		},
 		{
+			name:    "ISO88592",
+			charset: "ISO8859_2",
+			value:   "Za\u017c\u00f3\u0142\u0107",
+			fixed:   "\u0141",
+		},
+		{
+			name:    "WIN1250",
+			charset: "WIN1250",
+			value:   "Za\u017c\u00f3\u0142\u0107",
+			fixed:   "\u0141",
+		},
+		{
 			name:    "WIN1251",
 			charset: "WIN1251",
 			value:   "\u041f\u0440\u0438\u0432\u0435\u0442",
@@ -72,6 +97,12 @@ func TestCharsetRoundTripMatrix(t *testing.T) {
 			charset: "WIN1252",
 			value:   "precio 10\u20ac",
 			fixed:   "\u20ac",
+		},
+		{
+			name:    "WIN1257",
+			charset: "WIN1257",
+			value:   "\u0104\u017duol\u0173",
+			fixed:   "\u010c",
 		},
 	}
 
@@ -108,6 +139,39 @@ func TestCharsetRoundTripMatrix(t *testing.T) {
 				t.Fatalf("char = %q, want %q", gotFixed, tt.fixed)
 			}
 		})
+	}
+}
+
+func TestNoneCharsetPassThrough(t *testing.T) {
+	db := openTestDB(t)
+	db.Exec("DROP TABLE TEST_NONE_CHARSET")
+	_, err := db.Exec(`
+		CREATE TABLE TEST_NONE_CHARSET (
+			ID INTEGER NOT NULL PRIMARY KEY,
+			V_TEXT VARCHAR(20) CHARACTER SET NONE,
+			V_RAW VARCHAR(8) CHARACTER SET NONE
+		)`)
+	if err != nil {
+		t.Fatalf("CREATE: %v", err)
+	}
+	defer db.Exec("DROP TABLE TEST_NONE_CHARSET")
+
+	wantText := "utf8 \u20ac"
+	wantRaw := []byte{0xff, 0x00, 0x41, 0x20}
+	if _, err := db.Exec("INSERT INTO TEST_NONE_CHARSET VALUES (?, ?, ?)", 1, wantText, wantRaw); err != nil {
+		t.Fatalf("INSERT: %v", err)
+	}
+
+	var gotText string
+	var gotRaw []byte
+	if err := db.QueryRow("SELECT V_TEXT, V_RAW FROM TEST_NONE_CHARSET WHERE ID=1").Scan(&gotText, &gotRaw); err != nil {
+		t.Fatalf("SELECT: %v", err)
+	}
+	if gotText != wantText {
+		t.Fatalf("text = %q, want %q", gotText, wantText)
+	}
+	if !bytes.Equal(gotRaw, wantRaw) {
+		t.Fatalf("raw = % x, want % x", gotRaw, wantRaw)
 	}
 }
 
@@ -165,6 +229,105 @@ func TestOctetsCharsetRoundTrip(t *testing.T) {
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("rows.Err: %v", err)
+	}
+}
+
+func TestTextBlobExplicitColumnCharsetRoundTrip(t *testing.T) {
+	db := openTestDB(t)
+	db.Exec("DROP TABLE TEST_BLOB_COL_CH")
+	_, err := db.Exec(`
+		CREATE TABLE TEST_BLOB_COL_CH (
+			ID INTEGER NOT NULL PRIMARY KEY,
+			V_WIN1251 BLOB SUB_TYPE TEXT CHARACTER SET WIN1251,
+			V_WIN1252 BLOB SUB_TYPE TEXT CHARACTER SET WIN1252
+		)`)
+	if err != nil {
+		t.Fatalf("CREATE: %v", err)
+	}
+	defer db.Exec("DROP TABLE TEST_BLOB_COL_CH")
+
+	wantWin1251 := "\u041f\u0440\u0438\u0432\u0435\u0442"
+	wantWin1252 := "precio 10\u20ac"
+	if _, err := db.Exec("INSERT INTO TEST_BLOB_COL_CH VALUES (?, ?, ?)", 1, wantWin1251, wantWin1252); err != nil {
+		t.Fatalf("INSERT: %v", err)
+	}
+
+	var gotWin1251, gotWin1252 string
+	if err := db.QueryRow("SELECT V_WIN1251, V_WIN1252 FROM TEST_BLOB_COL_CH WHERE ID=1").Scan(&gotWin1251, &gotWin1252); err != nil {
+		t.Fatalf("SELECT: %v", err)
+	}
+	if !utf8.ValidString(gotWin1251) || !utf8.ValidString(gotWin1252) {
+		t.Fatalf("got invalid UTF-8: win1251=% x win1252=% x", gotWin1251, gotWin1252)
+	}
+	if gotWin1251 != wantWin1251 {
+		t.Fatalf("win1251 blob = %q, want %q", gotWin1251, wantWin1251)
+	}
+	if gotWin1252 != wantWin1252 {
+		t.Fatalf("win1252 blob = %q, want %q", gotWin1252, wantWin1252)
+	}
+}
+
+func TestTextBlobExplicitColumnCharsetRawBytes(t *testing.T) {
+	tests := []struct {
+		name    string
+		charset string
+		value   string
+		raw     []byte
+	}{
+		{
+			name:    "WIN1251",
+			charset: "WIN1251",
+			value:   "\u041f\u0440\u0438\u0432\u0435\u0442",
+			raw:     []byte{0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2},
+		},
+		{
+			name:    "WIN1252",
+			charset: "WIN1252",
+			value:   "precio 10\u20ac",
+			raw:     []byte{'p', 'r', 'e', 'c', 'i', 'o', ' ', '1', '0', 0x80},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, err := sqlOpenTestDBWithParam("charset", tt.charset)
+			if err != nil {
+				t.Fatalf("open %s DB: %v", tt.charset, err)
+			}
+			defer db.Close()
+
+			table := "TEST_BLOB_RAW_" + tt.name
+			db.Exec("DROP TABLE " + table)
+			_, err = db.Exec(fmt.Sprintf(`
+				CREATE TABLE %s (
+					ID INTEGER NOT NULL PRIMARY KEY,
+					V_BLOB BLOB SUB_TYPE TEXT CHARACTER SET %s
+				)`, table, tt.charset))
+			if err != nil {
+				t.Fatalf("CREATE: %v", err)
+			}
+			defer db.Exec("DROP TABLE " + table)
+
+			if _, err := db.Exec("INSERT INTO "+table+" VALUES (?, ?)", 1, tt.value); err != nil {
+				t.Fatalf("INSERT: %v", err)
+			}
+
+			var got string
+			if err := db.QueryRow("SELECT V_BLOB FROM " + table + " WHERE ID=1").Scan(&got); err != nil {
+				t.Fatalf("SELECT: %v", err)
+			}
+			if got != tt.value {
+				t.Fatalf("blob = %q, want %q", got, tt.value)
+			}
+
+			var raw []byte
+			if err := db.QueryRow("SELECT CAST(V_BLOB AS BLOB SUB_TYPE 0) FROM " + table + " WHERE ID=1").Scan(&raw); err != nil {
+				t.Fatalf("SELECT raw blob: %v", err)
+			}
+			if !bytes.Equal(raw, tt.raw) {
+				t.Fatalf("raw blob = % x, want % x", raw, tt.raw)
+			}
+		})
 	}
 }
 

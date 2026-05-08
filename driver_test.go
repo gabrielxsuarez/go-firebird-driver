@@ -3,9 +3,11 @@ package firebird
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -47,6 +49,38 @@ func openTestDB(t *testing.T) *sql.DB {
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+type testDBVersion struct {
+	name string
+	dsn  string
+}
+
+func testDBVersions() []testDBVersion {
+	return []testDBVersion{
+		{name: "FB3", dsn: testDSN},
+		{name: "FB4", dsn: testDSN_FB4},
+		{name: "FB5", dsn: testDSN_FB5},
+	}
+}
+
+func openVersionedTestDB(t *testing.T, version testDBVersion) *sql.DB {
+	t.Helper()
+	if strings.TrimSpace(version.dsn) == "" {
+		t.Skipf("%s DSN not configured", version.name)
+	}
+	db, err := sql.Open("firebird", version.dsn)
+	if err != nil {
+		t.Skipf("%s not available: %v", version.name, err)
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if err := db.Ping(); err != nil {
+		db.Close()
+		t.Skipf("%s not reachable (%s): %v", version.name, version.dsn, err)
+	}
 	t.Cleanup(func() { db.Close() })
 	return db
 }
@@ -678,6 +712,25 @@ func TestPreparedStatement(t *testing.T) {
 	}
 }
 
+func TestStatementCloseIdempotentKeepsConnectionReusable(t *testing.T) {
+	db := openTestDB(t)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
+	stmt, err := db.Prepare("SELECT CAST(? AS INTEGER) FROM RDB$DATABASE")
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if err := stmt.Close(); err != nil {
+		t.Fatalf("Stmt.Close: %v", err)
+	}
+	if err := stmt.Close(); err != nil {
+		t.Fatalf("Stmt.Close second call: %v", err)
+	}
+
+	assertConnectionReusable(t, db, "after idempotent stmt close")
+}
+
 // --- Error Handling Tests ---
 
 func TestErrorSyntax(t *testing.T) {
@@ -706,6 +759,432 @@ func TestErrorConstraintViolation(t *testing.T) {
 	_, err := db.Exec("INSERT INTO TEST_CONSTRAINT VALUES (1)")
 	if err == nil {
 		t.Fatal("expected error for duplicate primary key")
+	}
+}
+
+// --- Lifecycle / Protocol Sync Tests ---
+
+func assertConnectionReusable(t *testing.T, db *sql.DB, label string) {
+	t.Helper()
+	var v int
+	if err := db.QueryRow("SELECT 42 FROM RDB$DATABASE").Scan(&v); err != nil {
+		t.Fatalf("%s: connection not reusable: %v", label, err)
+	}
+	if v != 42 {
+		t.Fatalf("%s: got %d, want 42", label, v)
+	}
+}
+
+func TestRowsCloseBeforeNextKeepsConnectionReusable(t *testing.T) {
+	db := openTestDB(t)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
+	rows, err := db.Query("SELECT RDB$RELATION_ID FROM RDB$RELATIONS ORDER BY RDB$RELATION_ID")
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("Rows.Close: %v", err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("Rows.Close second call: %v", err)
+	}
+
+	assertConnectionReusable(t, db, "after close before next")
+}
+
+func TestRowsCloseAfterPartialFetchKeepsConnectionReusable(t *testing.T) {
+	db, err := sqlOpenTestDBWithParam("fetch_size", "3")
+	if err != nil {
+		t.Fatalf("open fetch_size DB: %v", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
+	db.Exec("DROP TABLE TEST_ROWS_CLOSE")
+	_, err = db.Exec(`CREATE TABLE TEST_ROWS_CLOSE (ID INTEGER NOT NULL PRIMARY KEY, V VARCHAR(20))`)
+	if err != nil {
+		t.Fatalf("CREATE: %v", err)
+	}
+	defer db.Exec("DROP TABLE TEST_ROWS_CLOSE")
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	stmt, err := tx.Prepare("INSERT INTO TEST_ROWS_CLOSE VALUES (?, ?)")
+	if err != nil {
+		tx.Rollback()
+		t.Fatalf("Prepare insert: %v", err)
+	}
+	for i := range 25 {
+		if _, err := stmt.Exec(i+1, fmt.Sprintf("row_%02d", i+1)); err != nil {
+			stmt.Close()
+			tx.Rollback()
+			t.Fatalf("INSERT %d: %v", i+1, err)
+		}
+	}
+	if err := stmt.Close(); err != nil {
+		tx.Rollback()
+		t.Fatalf("stmt.Close: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	rows, err := db.Query("SELECT ID, V FROM TEST_ROWS_CLOSE ORDER BY ID")
+	if err != nil {
+		t.Fatalf("SELECT: %v", err)
+	}
+	if !rows.Next() {
+		t.Fatal("expected first row")
+	}
+	var id int
+	var value string
+	if err := rows.Scan(&id, &value); err != nil {
+		rows.Close()
+		t.Fatalf("Scan first row: %v", err)
+	}
+	if id != 1 || value != "row_01" {
+		rows.Close()
+		t.Fatalf("first row = (%d, %q), want (1, row_01)", id, value)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("Rows.Close: %v", err)
+	}
+
+	assertConnectionReusable(t, db, "after partial rows close")
+
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM TEST_ROWS_CLOSE").Scan(&count); err != nil {
+		t.Fatalf("COUNT after close: %v", err)
+	}
+	if count != 25 {
+		t.Fatalf("COUNT = %d, want 25", count)
+	}
+}
+
+func TestPreparedRowsCloseEarlyAllowsStatementReuse(t *testing.T) {
+	db, err := sqlOpenTestDBWithParam("fetch_size", "2")
+	if err != nil {
+		t.Fatalf("open fetch_size DB: %v", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
+	db.Exec("DROP TABLE TEST_PREP_ROWS_CLOSE")
+	_, err = db.Exec(`CREATE TABLE TEST_PREP_ROWS_CLOSE (ID INTEGER NOT NULL PRIMARY KEY, V INTEGER)`)
+	if err != nil {
+		t.Fatalf("CREATE: %v", err)
+	}
+	defer db.Exec("DROP TABLE TEST_PREP_ROWS_CLOSE")
+
+	for i := range 8 {
+		if _, err := db.Exec("INSERT INTO TEST_PREP_ROWS_CLOSE VALUES (?, ?)", i+1, (i+1)*10); err != nil {
+			t.Fatalf("INSERT %d: %v", i+1, err)
+		}
+	}
+
+	stmt, err := db.Prepare("SELECT ID, V FROM TEST_PREP_ROWS_CLOSE WHERE ID >= ? ORDER BY ID")
+	if err != nil {
+		t.Fatalf("Prepare query: %v", err)
+	}
+	defer stmt.Close()
+
+	rows, err := stmt.Query(1)
+	if err != nil {
+		t.Fatalf("stmt.Query first: %v", err)
+	}
+	if !rows.Next() {
+		rows.Close()
+		t.Fatal("expected first row")
+	}
+	var id, v int
+	if err := rows.Scan(&id, &v); err != nil {
+		rows.Close()
+		t.Fatalf("Scan first query: %v", err)
+	}
+	if id != 1 || v != 10 {
+		rows.Close()
+		t.Fatalf("first query row = (%d, %d), want (1, 10)", id, v)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("Rows.Close first query: %v", err)
+	}
+
+	rows, err = stmt.Query(5)
+	if err != nil {
+		t.Fatalf("stmt.Query second: %v", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		t.Fatal("expected second query row")
+	}
+	if err := rows.Scan(&id, &v); err != nil {
+		t.Fatalf("Scan second query: %v", err)
+	}
+	if id != 5 || v != 50 {
+		t.Fatalf("second query row = (%d, %d), want (5, 50)", id, v)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("Rows.Close second query: %v", err)
+	}
+	if err := stmt.Close(); err != nil {
+		t.Fatalf("Stmt.Close: %v", err)
+	}
+	if err := stmt.Close(); err != nil {
+		t.Fatalf("Stmt.Close second call: %v", err)
+	}
+
+	assertConnectionReusable(t, db, "after prepared rows close")
+}
+
+func TestBlobRowsCloseEarlyKeepsConnectionReusable(t *testing.T) {
+	db, err := sqlOpenTestDBWithParam("fetch_size", "2")
+	if err != nil {
+		t.Fatalf("open fetch_size DB: %v", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
+	db.Exec("DROP TABLE TEST_BLOB_CLOSE_EARLY")
+	_, err = db.Exec(`CREATE TABLE TEST_BLOB_CLOSE_EARLY (
+		ID INTEGER NOT NULL PRIMARY KEY,
+		DATA BLOB SUB_TYPE TEXT
+	)`)
+	if err != nil {
+		t.Fatalf("CREATE: %v", err)
+	}
+	defer db.Exec("DROP TABLE TEST_BLOB_CLOSE_EARLY")
+
+	for i := range 6 {
+		data := strings.Repeat(fmt.Sprintf("blob_%d_", i+1), 300)
+		if _, err := db.Exec("INSERT INTO TEST_BLOB_CLOSE_EARLY VALUES (?, ?)", i+1, data); err != nil {
+			t.Fatalf("INSERT %d: %v", i+1, err)
+		}
+	}
+
+	rows, err := db.Query("SELECT ID, DATA FROM TEST_BLOB_CLOSE_EARLY ORDER BY ID")
+	if err != nil {
+		t.Fatalf("SELECT: %v", err)
+	}
+	if !rows.Next() {
+		rows.Close()
+		t.Fatal("expected first blob row")
+	}
+	var id int
+	var data string
+	if err := rows.Scan(&id, &data); err != nil {
+		rows.Close()
+		t.Fatalf("Scan first blob row: %v", err)
+	}
+	if id != 1 || !strings.HasPrefix(data, "blob_1_") {
+		rows.Close()
+		t.Fatalf("first blob row = (%d, %.16q)", id, data)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("Rows.Close: %v", err)
+	}
+
+	assertConnectionReusable(t, db, "after early blob rows close")
+}
+
+func TestTransactionRowsCloseEarlyKeepsTransactionUsable(t *testing.T) {
+	db, err := sqlOpenTestDBWithParam("fetch_size", "2")
+	if err != nil {
+		t.Fatalf("open fetch_size DB: %v", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
+	db.Exec("DROP TABLE TEST_TX_ROWS_CLOSE")
+	_, err = db.Exec(`CREATE TABLE TEST_TX_ROWS_CLOSE (ID INTEGER NOT NULL PRIMARY KEY, V INTEGER)`)
+	if err != nil {
+		t.Fatalf("CREATE: %v", err)
+	}
+	defer db.Exec("DROP TABLE TEST_TX_ROWS_CLOSE")
+
+	for i := range 8 {
+		if _, err := db.Exec("INSERT INTO TEST_TX_ROWS_CLOSE VALUES (?, ?)", i+1, (i+1)*100); err != nil {
+			t.Fatalf("INSERT %d: %v", i+1, err)
+		}
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+
+	rows, err := tx.Query("SELECT ID, V FROM TEST_TX_ROWS_CLOSE ORDER BY ID")
+	if err != nil {
+		tx.Rollback()
+		t.Fatalf("tx.Query: %v", err)
+	}
+	if !rows.Next() {
+		rows.Close()
+		tx.Rollback()
+		t.Fatal("expected first row")
+	}
+	var id, v int
+	if err := rows.Scan(&id, &v); err != nil {
+		rows.Close()
+		tx.Rollback()
+		t.Fatalf("Scan: %v", err)
+	}
+	if id != 1 || v != 100 {
+		rows.Close()
+		tx.Rollback()
+		t.Fatalf("first row = (%d, %d), want (1, 100)", id, v)
+	}
+	if err := rows.Close(); err != nil {
+		tx.Rollback()
+		t.Fatalf("Rows.Close: %v", err)
+	}
+
+	var count int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM TEST_TX_ROWS_CLOSE WHERE ID > 4").Scan(&count); err != nil {
+		tx.Rollback()
+		t.Fatalf("tx.QueryRow after close: %v", err)
+	}
+	if count != 4 {
+		tx.Rollback()
+		t.Fatalf("COUNT = %d, want 4", count)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit after early rows close: %v", err)
+	}
+
+	assertConnectionReusable(t, db, "after transaction early rows close")
+}
+
+func TestProtocolSyncAfterRepeatedStatementErrors(t *testing.T) {
+	db := openTestDB(t)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
+	for i := range 5 {
+		if _, err := db.Exec("SELECT * FROM NONEXISTENT_TABLE_FOR_SYNC_TEST"); err == nil {
+			t.Fatalf("iter %d: expected table-not-found error", i)
+		}
+		assertConnectionReusable(t, db, fmt.Sprintf("after table-not-found error %d", i))
+
+		if _, err := db.Exec("THIS IS NOT VALID SQL"); err == nil {
+			t.Fatalf("iter %d: expected syntax error", i)
+		}
+		assertConnectionReusable(t, db, fmt.Sprintf("after syntax error %d", i))
+	}
+}
+
+func TestProtocolSyncAfterRepeatedExecuteErrors(t *testing.T) {
+	db := openTestDB(t)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
+	db.Exec("DROP TABLE TEST_EXEC_ERROR_SYNC")
+	_, err := db.Exec(`CREATE TABLE TEST_EXEC_ERROR_SYNC (ID INTEGER NOT NULL PRIMARY KEY)`)
+	if err != nil {
+		t.Fatalf("CREATE: %v", err)
+	}
+	defer db.Exec("DROP TABLE TEST_EXEC_ERROR_SYNC")
+
+	if _, err := db.Exec("INSERT INTO TEST_EXEC_ERROR_SYNC VALUES (1)"); err != nil {
+		t.Fatalf("initial INSERT: %v", err)
+	}
+	for i := range 5 {
+		if _, err := db.Exec("INSERT INTO TEST_EXEC_ERROR_SYNC VALUES (1)"); err == nil {
+			t.Fatalf("iter %d: expected duplicate key error", i)
+		}
+		assertConnectionReusable(t, db, fmt.Sprintf("after duplicate key error %d", i))
+	}
+}
+
+func TestLifecycleSmokeFirebirdVersions(t *testing.T) {
+	for _, version := range testDBVersions() {
+		t.Run(version.name, func(t *testing.T) {
+			db := openVersionedTestDB(t, version)
+
+			table := "TEST_LIFE_" + version.name
+			db.Exec("DROP TABLE " + table)
+			_, err := db.Exec("CREATE TABLE " + table + " (ID INTEGER NOT NULL PRIMARY KEY, V VARCHAR(20))")
+			if err != nil {
+				t.Fatalf("CREATE: %v", err)
+			}
+			defer db.Exec("DROP TABLE " + table)
+
+			for i := range 8 {
+				if _, err := db.Exec("INSERT INTO "+table+" VALUES (?, ?)", i+1, fmt.Sprintf("%s_%02d", version.name, i+1)); err != nil {
+					t.Fatalf("INSERT %d: %v", i+1, err)
+				}
+			}
+
+			rows, err := db.Query("SELECT ID, V FROM " + table + " ORDER BY ID")
+			if err != nil {
+				t.Fatalf("SELECT: %v", err)
+			}
+			if !rows.Next() {
+				rows.Close()
+				t.Fatal("expected first row")
+			}
+			var id int
+			var value string
+			if err := rows.Scan(&id, &value); err != nil {
+				rows.Close()
+				t.Fatalf("Scan: %v", err)
+			}
+			if id != 1 || value != version.name+"_01" {
+				rows.Close()
+				t.Fatalf("first row = (%d, %q), want (1, %q)", id, value, version.name+"_01")
+			}
+			if err := rows.Close(); err != nil {
+				t.Fatalf("Rows.Close: %v", err)
+			}
+
+			assertConnectionReusable(t, db, "after early close "+version.name)
+
+			if _, err := db.Exec("INSERT INTO " + table + " VALUES (1, 'duplicate')"); err == nil {
+				t.Fatal("expected duplicate key error")
+			}
+			assertConnectionReusable(t, db, "after duplicate key "+version.name)
+
+			stmt, err := db.Prepare("SELECT ID FROM " + table + " WHERE ID >= ? ORDER BY ID")
+			if err != nil {
+				t.Fatalf("Prepare: %v", err)
+			}
+			stmtRows, err := stmt.Query(4)
+			if err != nil {
+				stmt.Close()
+				t.Fatalf("stmt.Query: %v", err)
+			}
+			if !stmtRows.Next() {
+				stmtRows.Close()
+				stmt.Close()
+				t.Fatal("expected prepared row")
+			}
+			if err := stmtRows.Scan(&id); err != nil {
+				stmtRows.Close()
+				stmt.Close()
+				t.Fatalf("prepared Scan: %v", err)
+			}
+			if id != 4 {
+				stmtRows.Close()
+				stmt.Close()
+				t.Fatalf("prepared first row = %d, want 4", id)
+			}
+			if err := stmtRows.Close(); err != nil {
+				stmt.Close()
+				t.Fatalf("prepared Rows.Close: %v", err)
+			}
+			if err := stmt.Close(); err != nil {
+				t.Fatalf("Stmt.Close: %v", err)
+			}
+
+			assertConnectionReusable(t, db, "after prepared early close "+version.name)
+		})
 	}
 }
 
@@ -1275,6 +1754,59 @@ func TestContextCancelDuringQuery(t *testing.T) {
 	}
 }
 
+func TestContextCancelDuringRowsScan(t *testing.T) {
+	db, err := sqlOpenTestDBWithParam("fetch_size", "50")
+	if err != nil {
+		t.Fatalf("open fetch_size DB: %v", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	rows, err := db.QueryContext(ctx, `
+		EXECUTE BLOCK RETURNS (I BIGINT)
+		AS
+			DECLARE C BIGINT = 0;
+		BEGIN
+			WHILE (C < 9000000000) DO
+			BEGIN
+				C = C + 1;
+				I = C;
+				SUSPEND;
+			END
+		END`)
+	if err != nil {
+		t.Fatalf("QueryContext: %v", err)
+	}
+	defer rows.Close()
+
+	deadline := time.Now().Add(3 * time.Second)
+	scanned := 0
+	var scanErr error
+	for rows.Next() {
+		var n int64
+		if err := rows.Scan(&n); err != nil {
+			scanErr = err
+			break
+		}
+		scanned++
+		if time.Now().After(deadline) {
+			t.Fatalf("Rows.Next did not stop after context deadline; scanned %d rows", scanned)
+		}
+	}
+	if scanned == 0 {
+		t.Fatal("expected to scan at least one row before cancellation")
+	}
+	if err := rows.Err(); !errors.Is(err, context.DeadlineExceeded) && !errors.Is(scanErr, context.DeadlineExceeded) {
+		t.Fatalf("Rows.Err = %v, Scan err = %v, want context deadline exceeded", err, scanErr)
+	}
+
+	assertConnectionReusable(t, db, "after context-cancelled rows scan")
+}
+
 func TestPingWithContext(t *testing.T) {
 	db := openTestDB(t)
 
@@ -1798,14 +2330,16 @@ func TestDataTypeDecfloat_FB4(t *testing.T) {
 	defer db.Exec("DROP TABLE TEST_DECF")
 
 	tests := []struct {
-		id  int
-		v16 string
-		v34 string
+		id      int
+		v16     string
+		v34     string
+		wantV16 string
+		wantV34 string
 	}{
-		{1, "123.456", "123456789012345678901234567890.1234"},
-		{2, "-0.001", "-0.00000000000000000000000000000001"},
-		{3, "0", "0"},
-		{4, "9999999999999999", "9999999999999999999999999999999999"},
+		{1, "123.456", "123456789012345678901234567890.1234", "123.456", "123456789012345678901234567890.1234"},
+		{2, "-0.001", "-0.00000000000000000000000000000001", "-0.001", "-1E-32"},
+		{3, "0", "0", "0", "0"},
+		{4, "9999999999999999", "9999999999999999999999999999999999", "9999999999999999", "9999999999999999999999999999999999"},
 	}
 
 	for _, tt := range tests {
@@ -1832,15 +2366,17 @@ func TestDataTypeDecfloat_FB4(t *testing.T) {
 		if id != tests[i].id {
 			t.Errorf("row %d: id got %d, want %d", i, id, tests[i].id)
 		}
-		// DECFLOAT values are returned as strings; verify non-empty and parseable
-		if v16 == "" {
-			t.Errorf("row %d: V16 is empty", i)
+		if v16 != tests[i].wantV16 {
+			t.Errorf("row %d: V16 got %q, want %q", i, v16, tests[i].wantV16)
 		}
-		if v34 == "" {
-			t.Errorf("row %d: V34 is empty", i)
+		if v34 != tests[i].wantV34 {
+			t.Errorf("row %d: V34 got %q, want %q", i, v34, tests[i].wantV34)
 		}
 		t.Logf("row %d: V16=%q V34=%q", i, v16, v34)
 		i++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows.Err: %v", err)
 	}
 	if i != len(tests) {
 		t.Fatalf("expected %d rows, got %d", len(tests), i)
@@ -1931,6 +2467,9 @@ func TestDataTypeInt128_FB4(t *testing.T) {
 
 func TestDataTypeTimestampTZ_FB4(t *testing.T) {
 	db := openFB4DB(t)
+	if _, err := db.Exec("set bind of timestamp with time zone to native"); err != nil {
+		t.Fatalf("SET BIND timestamp with time zone: %v", err)
+	}
 
 	db.Exec("DROP TABLE TEST_TSTZ")
 	_, err := db.Exec(`CREATE TABLE TEST_TSTZ (
@@ -1962,6 +2501,16 @@ func TestDataTypeTimestampTZ_FB4(t *testing.T) {
 	defer rows.Close()
 
 	count := 0
+	expected := map[int]struct {
+		location string
+		hour     int
+		minute   int
+		offset   int
+	}{
+		1: {hour: 14, minute: 30, offset: -4 * 60 * 60},
+		2: {location: "UTC", hour: 18, minute: 30, offset: 0},
+		3: {location: "+05:30", hour: 10, minute: 0, offset: 5*60*60 + 30*60},
+	}
 	for rows.Next() {
 		var id int
 		var ts time.Time
@@ -1970,6 +2519,21 @@ func TestDataTypeTimestampTZ_FB4(t *testing.T) {
 		}
 		if ts.IsZero() {
 			t.Errorf("row %d: got zero time", id)
+		}
+		want, ok := expected[id]
+		if !ok {
+			t.Fatalf("unexpected row id %d", id)
+		}
+		if want.location != "" && ts.Location().String() != want.location {
+			t.Errorf("row %d: location got %q, want %q", id, ts.Location().String(), want.location)
+		}
+		if ts.Hour() != want.hour || ts.Minute() != want.minute {
+			t.Errorf("row %d: clock got %02d:%02d, want %02d:%02d",
+				id, ts.Hour(), ts.Minute(), want.hour, want.minute)
+		}
+		_, offset := ts.Zone()
+		if offset != want.offset {
+			t.Errorf("row %d: offset got %d, want %d", id, offset, want.offset)
 		}
 		t.Logf("row %d: %v (zone=%s)", id, ts, ts.Location())
 		count++
@@ -1981,6 +2545,9 @@ func TestDataTypeTimestampTZ_FB4(t *testing.T) {
 
 func TestDataTypeTimeTZ_FB4(t *testing.T) {
 	db := openFB4DB(t)
+	if _, err := db.Exec("set bind of time with time zone to native"); err != nil {
+		t.Fatalf("SET BIND time with time zone: %v", err)
+	}
 
 	db.Exec("DROP TABLE TEST_TTZ")
 	_, err := db.Exec(`CREATE TABLE TEST_TTZ (
@@ -2000,6 +2567,10 @@ func TestDataTypeTimeTZ_FB4(t *testing.T) {
 	if err != nil {
 		t.Fatalf("INSERT midnight UTC: %v", err)
 	}
+	_, err = db.Exec("INSERT INTO TEST_TTZ VALUES (3, TIME '10:15:00 +05:30')")
+	if err != nil {
+		t.Fatalf("INSERT offset: %v", err)
+	}
 
 	rows, err := db.Query("SELECT ID, V FROM TEST_TTZ ORDER BY ID")
 	if err != nil {
@@ -2008,17 +2579,40 @@ func TestDataTypeTimeTZ_FB4(t *testing.T) {
 	defer rows.Close()
 
 	count := 0
+	expected := map[int]struct {
+		location string
+		hour     int
+		minute   int
+		offset   int
+	}{
+		1: {hour: 14, minute: 30, offset: -5 * 60 * 60},
+		2: {location: "UTC", hour: 0, minute: 0, offset: 0},
+		3: {location: "+05:30", hour: 10, minute: 15, offset: 5*60*60 + 30*60},
+	}
 	for rows.Next() {
 		var id int
 		var tm time.Time
 		if err := rows.Scan(&id, &tm); err != nil {
 			t.Fatalf("row %d: Scan: %v", count, err)
 		}
+		if want, ok := expected[id]; ok {
+			if want.location != "" && tm.Location().String() != want.location {
+				t.Errorf("row %d: location got %q, want %q", id, tm.Location().String(), want.location)
+			}
+			if tm.Hour() != want.hour || tm.Minute() != want.minute {
+				t.Errorf("row %d: clock got %02d:%02d, want %02d:%02d",
+					id, tm.Hour(), tm.Minute(), want.hour, want.minute)
+			}
+			_, offset := tm.Zone()
+			if offset != want.offset {
+				t.Errorf("row %d: offset got %d, want %d", id, offset, want.offset)
+			}
+		}
 		t.Logf("row %d: %v (zone=%s)", id, tm, tm.Location())
 		count++
 	}
-	if count != 2 {
-		t.Fatalf("expected 2 rows, got %d", count)
+	if count != 3 {
+		t.Fatalf("expected 3 rows, got %d", count)
 	}
 }
 
@@ -2054,9 +2648,18 @@ func TestDataTypeNumericHighPrecision_FB4(t *testing.T) {
 
 func TestColumnMetadataFB4Types(t *testing.T) {
 	db := openFB4DB(t)
+	runColumnMetadataFB4PlusTypes(t, db, "TEST_META4")
+}
 
-	db.Exec("DROP TABLE TEST_META4")
-	_, err := db.Exec(`CREATE TABLE TEST_META4 (
+func TestColumnMetadataFB5Types(t *testing.T) {
+	db := openFB5DB(t)
+	runColumnMetadataFB4PlusTypes(t, db, "TEST_META5")
+}
+
+func runColumnMetadataFB4PlusTypes(t *testing.T, db *sql.DB, table string) {
+	t.Helper()
+	db.Exec("DROP TABLE " + table)
+	_, err := db.Exec(`CREATE TABLE ` + table + ` (
 		ID INTEGER NOT NULL PRIMARY KEY,
 		V_DF16 DECFLOAT(16),
 		V_DF34 DECFLOAT(34),
@@ -2067,14 +2670,14 @@ func TestColumnMetadataFB4Types(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CREATE: %v", err)
 	}
-	defer db.Exec("DROP TABLE TEST_META4")
+	defer db.Exec("DROP TABLE " + table)
 
-	_, err = db.Exec("INSERT INTO TEST_META4 VALUES (1, 1.0, 1.0, 1, CURRENT_TIMESTAMP, CURRENT_TIME)")
+	_, err = db.Exec("INSERT INTO " + table + " VALUES (1, 1.0, 1.0, 1, CURRENT_TIMESTAMP, CURRENT_TIME)")
 	if err != nil {
 		t.Fatalf("INSERT: %v", err)
 	}
 
-	rows, err := db.Query("SELECT * FROM TEST_META4")
+	rows, err := db.Query("SELECT * FROM " + table)
 	if err != nil {
 		t.Fatalf("SELECT: %v", err)
 	}
@@ -2092,6 +2695,13 @@ func TestColumnMetadataFB4Types(t *testing.T) {
 		"V_TSTZ": "TIMESTAMP WITH TIME ZONE",
 		"V_TTZ":  "TIME WITH TIME ZONE",
 	}
+	expectedScanTypes := map[string]reflect.Type{
+		"V_DF16": reflect.TypeOf(""),
+		"V_DF34": reflect.TypeOf(""),
+		"V_I128": reflect.TypeOf(""),
+		"V_TSTZ": reflect.TypeOf(time.Time{}),
+		"V_TTZ":  reflect.TypeOf(time.Time{}),
+	}
 
 	for _, ct := range colTypes {
 		expected, ok := expectedTypes[ct.Name()]
@@ -2101,6 +2711,10 @@ func TestColumnMetadataFB4Types(t *testing.T) {
 		if ct.DatabaseTypeName() != expected {
 			t.Errorf("column %s: DatabaseTypeName got %q, want %q",
 				ct.Name(), ct.DatabaseTypeName(), expected)
+		}
+		if scanType := ct.ScanType(); scanType != expectedScanTypes[ct.Name()] {
+			t.Errorf("column %s: ScanType got %v, want %v",
+				ct.Name(), scanType, expectedScanTypes[ct.Name()])
 		}
 	}
 }
@@ -2168,6 +2782,12 @@ func TestDataTypesFB5(t *testing.T) {
 
 	if df16 == "" || df34 == "" || i128 == "" {
 		t.Errorf("empty string values: df16=%q df34=%q i128=%q", df16, df34, i128)
+	}
+	if df16 != "42.5" {
+		t.Errorf("DECFLOAT(16): got %q, want 42.5", df16)
+	}
+	if df34 != "12345678901234567890.12345" {
+		t.Errorf("DECFLOAT(34): got %q", df34)
 	}
 	if tstz.IsZero() {
 		t.Error("TIMESTAMP WITH TIME ZONE is zero")

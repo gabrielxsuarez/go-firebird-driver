@@ -33,7 +33,21 @@ func BuildBLR(descs []ColumnDescriptor) []byte {
 // BuildParamBLR generates BLR for input parameters.
 // For parameters, we use the declared types from the descriptor.
 func BuildParamBLR(descs []ColumnDescriptor) []byte {
-	return BuildBLR(descs)
+	count := len(descs)
+
+	dst := make([]byte, 0, 8+count*10)
+	dst = append(dst, BlrVersion5, BlrBegin, BlrMessage, 0)
+
+	paramCount := count * 2
+	dst = append(dst, byte(paramCount), byte(paramCount>>8))
+
+	for i := range descs {
+		appendParamBLRType(&dst, &descs[i])
+		dst = append(dst, BlrShort, 0)
+	}
+
+	dst = append(dst, BlrEnd, BlrEOC)
+	return dst
 }
 
 // appendBLRType appends the BLR type descriptor for a column.
@@ -85,11 +99,11 @@ func appendBLRType(buf []byte, desc *ColumnDescriptor) []byte {
 	case SQLTimestamp:
 		buf = append(buf, BlrTimestamp)
 
-	case SQLTimeTZ:
-		buf = append(buf, BlrSQLTimeTZ)
+	case SQLTimeTZ, SQLTimeTZEx:
+		buf = append(buf, BlrExTimeTZ)
 
-	case SQLTimestampTZ:
-		buf = append(buf, BlrTimestampTZ)
+	case SQLTimestampTZ, SQLTimestampTZEx:
+		buf = append(buf, BlrExTimestampTZ)
 
 	case SQLDec16:
 		buf = append(buf, BlrDec64)
@@ -115,6 +129,25 @@ func appendBLRType(buf []byte, desc *ColumnDescriptor) []byte {
 	}
 
 	return buf
+}
+
+func appendParamBLRType(buf *[]byte, desc *ColumnDescriptor) {
+	sqlType := desc.SQLType & ^int32(1)
+	switch sqlType {
+	case SQLDec16:
+		*buf = appendVaryingUTF8BLR(*buf, 64)
+	case SQLDec34:
+		*buf = appendVaryingUTF8BLR(*buf, 128)
+	default:
+		*buf = appendBLRType(*buf, desc)
+	}
+}
+
+func appendVaryingUTF8BLR(buf []byte, length int32) []byte {
+	const charsetUTF8 int32 = 4
+	return append(buf, BlrVarying2,
+		byte(charsetUTF8), byte(charsetUTF8>>8),
+		byte(length), byte(length>>8))
 }
 
 // IOLength returns the wire size for a given SQL type.

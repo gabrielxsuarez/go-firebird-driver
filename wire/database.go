@@ -34,6 +34,11 @@ type WireConnection struct {
 
 	// cancelMu protects async cancel writes to the socket.
 	cancelMu sync.Mutex
+
+	// writeMu serializes all writes to the transport. This matters when
+	// cancellation is sent from a goroutine while another operation is flushing
+	// through the encrypted connection layers.
+	writeMu sync.Mutex
 }
 
 const maxFreeHandles = 8
@@ -88,6 +93,9 @@ func (wc *WireConnection) readResponse() (GenericResponse, error) {
 
 // flush sends buffered data to the wire.
 func (wc *WireConnection) flush() error {
+	wc.writeMu.Lock()
+	defer wc.writeMu.Unlock()
+
 	return wc.writer.Flush(wc.conn)
 }
 
@@ -129,7 +137,7 @@ func (wc *WireConnection) Detach() error {
 
 	// op_disconnect: no response
 	wc.writer.WriteInt32(opDisconnect)
-	wc.writer.Flush(wc.conn)
+	_ = wc.flush()
 	return wc.conn.Close()
 }
 
@@ -151,6 +159,9 @@ func (wc *WireConnection) Cancel(kind uint32) error {
 	w := NewWriter()
 	w.WriteInt32(opCancel)
 	w.WriteUInt32(kind)
+	wc.writeMu.Lock()
+	defer wc.writeMu.Unlock()
+
 	return w.Flush(wc.conn)
 }
 

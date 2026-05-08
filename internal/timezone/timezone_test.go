@@ -36,12 +36,43 @@ func TestResolveNegativeOffset(t *testing.T) {
 }
 
 func TestResolveNamedZone(t *testing.T) {
-	// Named zones start at 2879+. Find one that exists.
-	// The namedZones map is unexported, but we can test with a known value
-	// by checking that Resolve returns a non-nil *time.Location.
-	loc := Resolve(65535) // likely unknown → should fall back to UTC
-	if loc == nil {
-		t.Fatal("Resolve(65535) returned nil")
+	tests := []struct {
+		tzValue uint32
+		want    string
+	}{
+		{65361, "America/New_York"},
+		{65069, "Europe/Madrid"},
+		{64909, "UTC"},
+		{65470, "America/Argentina/Buenos_Aires"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			loc := Resolve(tt.tzValue)
+			if loc == nil {
+				t.Fatalf("Resolve(%d) returned nil", tt.tzValue)
+			}
+			if got := loc.String(); got != tt.want {
+				t.Fatalf("Resolve(%d) = %q, want %q", tt.tzValue, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNamedZoneNameBounds(t *testing.T) {
+	tests := []struct {
+		tzValue uint32
+		want    string
+	}{
+		{65535, "GMT"},
+		{65361, "America/New_York"},
+		{64898, "America/Coyhaique"},
+		{64897, ""},
+		{2879, ""},
+	}
+	for _, tt := range tests {
+		if got := namedZoneName(tt.tzValue); got != tt.want {
+			t.Errorf("namedZoneName(%d) = %q, want %q", tt.tzValue, got, tt.want)
+		}
 	}
 }
 

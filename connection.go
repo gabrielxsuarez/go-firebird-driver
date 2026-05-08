@@ -493,6 +493,7 @@ func (c *conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 
 	return &rows{
 		conn:         c,
+		ctx:          ctx,
 		stmtHandle:   stmtHandle,
 		txHandle:     txHandle,
 		outputs:      outputs,
