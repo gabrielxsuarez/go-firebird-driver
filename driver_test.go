@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -775,6 +777,22 @@ func assertConnectionReusable(t *testing.T, db *sql.DB, label string) {
 	}
 }
 
+func assertNoConnectionsInUse(t *testing.T, db *sql.DB, label string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		stats := db.Stats()
+		if stats.InUse == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: db.Stats().InUse = %d, want 0", label, stats.InUse)
+		}
+		runtime.Gosched()
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestRowsCloseBeforeNextKeepsConnectionReusable(t *testing.T) {
 	db := openTestDB(t)
 	db.SetMaxOpenConns(1)
@@ -1100,6 +1118,134 @@ func TestProtocolSyncAfterRepeatedExecuteErrors(t *testing.T) {
 			t.Fatalf("iter %d: expected duplicate key error", i)
 		}
 		assertConnectionReusable(t, db, fmt.Sprintf("after duplicate key error %d", i))
+	}
+}
+
+func TestPoolRetriesAfterIdleTransportClose(t *testing.T) {
+	db := openTestDB(t)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	sqlConn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("Conn: %v", err)
+	}
+	if err := sqlConn.PingContext(ctx); err != nil {
+		sqlConn.Close()
+		t.Fatalf("PingContext: %v", err)
+	}
+	if err := sqlConn.Raw(func(driverConn any) error {
+		c, ok := driverConn.(*conn)
+		if !ok {
+			return fmt.Errorf("driverConn type = %T, want *conn", driverConn)
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.wc.CloseTransport()
+	}); err != nil {
+		sqlConn.Close()
+		t.Fatalf("Raw close transport: %v", err)
+	}
+	if err := sqlConn.Close(); err != nil {
+		t.Fatalf("sqlConn.Close: %v", err)
+	}
+
+	var v int
+	if err := db.QueryRowContext(ctx, "SELECT CAST(42 AS INTEGER) FROM RDB$DATABASE").Scan(&v); err != nil {
+		t.Fatalf("QueryRow after idle transport close: %v", err)
+	}
+	if v != 42 {
+		t.Fatalf("got %d, want 42", v)
+	}
+	assertNoConnectionsInUse(t, db, "after retrying idle transport close")
+}
+
+func TestPoolDiscardsMarkedBadConnection(t *testing.T) {
+	db := openTestDB(t)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	sqlConn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("Conn: %v", err)
+	}
+	if err := sqlConn.PingContext(ctx); err != nil {
+		sqlConn.Close()
+		t.Fatalf("PingContext: %v", err)
+	}
+	if err := sqlConn.Raw(func(driverConn any) error {
+		c, ok := driverConn.(*conn)
+		if !ok {
+			return fmt.Errorf("driverConn type = %T, want *conn", driverConn)
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.markBadLocked()
+		return nil
+	}); err != nil {
+		sqlConn.Close()
+		t.Fatalf("Raw mark bad: %v", err)
+	}
+	if err := sqlConn.Close(); err != nil {
+		t.Fatalf("sqlConn.Close: %v", err)
+	}
+
+	assertConnectionReusable(t, db, "after returning marked bad connection to pool")
+	assertNoConnectionsInUse(t, db, "after discarding marked bad connection")
+}
+
+func TestDBStatsAfterRepeatedEarlyCloseAndErrors(t *testing.T) {
+	db := openTestDB(t)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
+	db.Exec("DROP TABLE TEST_RESOURCE_STATS")
+	_, err := db.Exec(`CREATE TABLE TEST_RESOURCE_STATS (
+		ID INTEGER NOT NULL PRIMARY KEY,
+		V VARCHAR(20)
+	)`)
+	if err != nil {
+		t.Fatalf("CREATE: %v", err)
+	}
+	defer db.Exec("DROP TABLE TEST_RESOURCE_STATS")
+
+	for i := range 8 {
+		if _, err := db.Exec("INSERT INTO TEST_RESOURCE_STATS VALUES (?, ?)", i+1, fmt.Sprintf("v_%02d", i+1)); err != nil {
+			t.Fatalf("INSERT %d: %v", i+1, err)
+		}
+	}
+
+	for i := range 8 {
+		rows, err := db.Query("SELECT ID, V FROM TEST_RESOURCE_STATS ORDER BY ID")
+		if err != nil {
+			t.Fatalf("iter %d: Query: %v", i, err)
+		}
+		if !rows.Next() {
+			rows.Close()
+			t.Fatalf("iter %d: expected first row", i)
+		}
+		var id int
+		var value string
+		if err := rows.Scan(&id, &value); err != nil {
+			rows.Close()
+			t.Fatalf("iter %d: Scan: %v", i, err)
+		}
+		if err := rows.Close(); err != nil {
+			t.Fatalf("iter %d: Rows.Close: %v", i, err)
+		}
+		assertNoConnectionsInUse(t, db, fmt.Sprintf("after early close %d", i))
+
+		if _, err := db.Exec("INSERT INTO TEST_RESOURCE_STATS VALUES (1, 'duplicate')"); err == nil {
+			t.Fatalf("iter %d: expected duplicate key error", i)
+		}
+		assertConnectionReusable(t, db, fmt.Sprintf("after duplicate key %d", i))
+		assertNoConnectionsInUse(t, db, fmt.Sprintf("after duplicate key %d", i))
 	}
 }
 
@@ -1979,6 +2125,45 @@ func openFB4DB(t *testing.T) *sql.DB {
 	return db
 }
 
+func openFB4DBWithParam(t *testing.T, key, value string) *sql.DB {
+	t.Helper()
+	dsn := appendDSNParam(testDSN_FB4, key, value)
+	db, err := sql.Open("firebird", dsn)
+	if err != nil {
+		t.Skipf("FB4 not available: %v", err)
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if err := db.Ping(); err != nil {
+		db.Close()
+		if canPingTestDSN(testDSN_FB4) {
+			t.Fatalf("FB4 parameter DSN not reachable (%s): %v", dsn, err)
+		}
+		t.Skipf("FB4 not reachable (%s): %v", testDSN_FB4, err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+func canPingTestDSN(dsn string) bool {
+	db, err := sql.Open("firebird", dsn)
+	if err != nil {
+		return false
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	return db.Ping() == nil
+}
+
+func appendDSNParam(dsn, key, value string) string {
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	return dsn + sep + url.QueryEscape(key) + "=" + url.QueryEscape(value)
+}
+
 // openFB5DB returns a *sql.DB for Firebird 5 using the configured test DSN.
 // Skips the test if the server is not reachable.
 func openFB5DB(t *testing.T) *sql.DB {
@@ -2540,6 +2725,41 @@ func TestDataTypeTimestampTZ_FB4(t *testing.T) {
 	}
 	if count != 3 {
 		t.Fatalf("expected 3 rows, got %d", count)
+	}
+}
+
+func TestDataTypeBindDSN_FB4(t *testing.T) {
+	db := openFB4DBWithParam(t, "dataTypeBind", "timestamp with time zone to legacy")
+
+	rows, err := db.Query("SELECT CAST('2024-06-15 14:30:00 America/New_York' AS TIMESTAMP WITH TIME ZONE) FROM RDB$DATABASE")
+	if err != nil {
+		t.Fatalf("SELECT: %v", err)
+	}
+	defer rows.Close()
+
+	cols, err := rows.ColumnTypes()
+	if err != nil {
+		t.Fatalf("ColumnTypes: %v", err)
+	}
+	if len(cols) != 1 {
+		t.Fatalf("ColumnTypes len = %d, want 1", len(cols))
+	}
+	if got := cols[0].DatabaseTypeName(); got != "TIMESTAMP" {
+		t.Fatalf("DatabaseTypeName = %q, want TIMESTAMP", got)
+	}
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			t.Fatalf("Rows.Err: %v", err)
+		}
+		t.Fatal("expected one row")
+	}
+	var ts time.Time
+	if err := rows.Scan(&ts); err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if ts.IsZero() {
+		t.Fatal("legacy-bound timestamp is zero")
 	}
 }
 

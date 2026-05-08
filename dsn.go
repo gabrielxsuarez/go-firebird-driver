@@ -12,16 +12,18 @@ import (
 
 // Config holds parsed DSN parameters.
 type Config struct {
-	Host      string
-	Port      string
-	Database  string
-	User      string
-	Password  string
-	Charset   string
-	Dialect   uint32
-	Role      string
-	WireCrypt uint32
-	FetchSize int
+	Host            string
+	Port            string
+	Database        string
+	User            string
+	Password        string
+	Charset         string
+	Dialect         uint32
+	Role            string
+	WireCrypt       uint32
+	FetchSize       int
+	DataTypeBind    string
+	SessionTimeZone string
 }
 
 // ParseDSN parses a Firebird DSN string.
@@ -87,6 +89,10 @@ func ParseDSN(dsn string) (*Config, error) {
 			cfg.Dialect = uint32(d)
 		case "role":
 			cfg.Role = val
+		case "data_type_bind", "datatypebind", "set_bind", "isc_dpb_set_bind":
+			cfg.DataTypeBind = val
+		case "session_time_zone", "sessiontimezone", "isc_dpb_session_time_zone", "timezone":
+			cfg.SessionTimeZone = val
 		case "wire_crypt":
 			switch strings.ToLower(val) {
 			case "disabled", "false", "0":

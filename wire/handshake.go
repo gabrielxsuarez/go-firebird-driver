@@ -29,6 +29,10 @@ type ProtocolConfig struct {
 	AuthPluginList string
 	// Role for the connection.
 	Role string
+	// DataTypeBind maps to isc_dpb_set_bind (Firebird 4+).
+	DataTypeBind string
+	// SessionTimeZone maps to isc_dpb_session_time_zone (Firebird 4+).
+	SessionTimeZone string
 }
 
 // HandshakeResult holds the outcome of a successful protocol handshake.
@@ -447,6 +451,12 @@ func buildConnectDPB(cfg *ProtocolConfig, srp *srpClient) []byte {
 	dpb.WriteString(IscDpbOsUser, getOSUser())
 	if cfg.Role != "" {
 		dpb.WriteString(63, cfg.Role) // isc_dpb_sql_role_name
+	}
+	if cfg.DataTypeBind != "" {
+		dpb.WriteString(IscDpbSetBind, cfg.DataTypeBind)
+	}
+	if cfg.SessionTimeZone != "" && !strings.EqualFold(cfg.SessionTimeZone, "server") {
+		dpb.WriteString(IscDpbSessionTimeZone, cfg.SessionTimeZone)
 	}
 	return dpb.Bytes()
 }

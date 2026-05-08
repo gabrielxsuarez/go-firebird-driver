@@ -114,17 +114,19 @@ func isTransientAuthFailure(err error) bool {
 // newConnection creates a new Firebird connection.
 func newConnection(ctx context.Context, cfg *Config) (*conn, error) {
 	wireCfg := &wire.ProtocolConfig{
-		Host:           cfg.Host,
-		Port:           cfg.Port,
-		Database:       cfg.Database,
-		User:           cfg.User,
-		Password:       cfg.Password,
-		Charset:        cfg.Charset,
-		Dialect:        cfg.Dialect,
-		WireCrypt:      cfg.WireCrypt,
-		WireCryptSet:   true,
-		Role:           cfg.Role,
-		AuthPluginList: wire.DefaultPluginList,
+		Host:            cfg.Host,
+		Port:            cfg.Port,
+		Database:        cfg.Database,
+		User:            cfg.User,
+		Password:        cfg.Password,
+		Charset:         cfg.Charset,
+		Dialect:         cfg.Dialect,
+		WireCrypt:       cfg.WireCrypt,
+		WireCryptSet:    true,
+		Role:            cfg.Role,
+		DataTypeBind:    cfg.DataTypeBind,
+		SessionTimeZone: cfg.SessionTimeZone,
+		AuthPluginList:  wire.DefaultPluginList,
 	}
 
 	var wc *wire.WireConnection

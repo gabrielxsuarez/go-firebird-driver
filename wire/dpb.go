@@ -30,7 +30,8 @@ const (
 	IscDpbProcessName      byte = 90
 	IscDpbSessionTimeZone  byte = 91
 	IscDpbSetDBReplica     byte = 92
-	IscDpbSetBindOfRPT     byte = 93
+	IscDpbSetBind          byte = 93
+	IscDpbSetBindOfRPT     byte = IscDpbSetBind
 	IscDpbDecfloatRound    byte = 94
 	IscDpbDecfloatTraps    byte = 95
 	IscDpbParallelWorkers  byte = 100

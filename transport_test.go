@@ -9,6 +9,7 @@ import (
 	"net"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/gabrielxsuarez/go-firebird-driver/wire"
 )
@@ -94,5 +95,72 @@ func TestIsValidRejectsBadConn(t *testing.T) {
 	}
 	if (&conn{closed: true}).IsValid() {
 		t.Fatal("closed connection should be invalid")
+	}
+}
+
+func TestHandleRetryableTransportErrorMarksBadConn(t *testing.T) {
+	t.Parallel()
+
+	c := &conn{}
+	err := c.handleRetryableErrorLocked(fmt.Errorf("op_prepare: flush: %w", syscall.EPIPE))
+	if !errors.Is(err, driver.ErrBadConn) {
+		t.Fatalf("handleRetryableErrorLocked() = %v, want driver.ErrBadConn", err)
+	}
+	if !c.bad {
+		t.Fatal("transport error should mark connection bad")
+	}
+}
+
+func TestHandleFatalTransportErrorMarksBadWithoutRetrySignal(t *testing.T) {
+	t.Parallel()
+
+	c := &conn{}
+	err := c.handleFatalErrorLocked(fmt.Errorf("op_execute: read: %w", io.ErrUnexpectedEOF))
+	if err == nil {
+		t.Fatal("expected transport error")
+	}
+	if errors.Is(err, driver.ErrBadConn) {
+		t.Fatalf("fatal operation error should not ask database/sql to retry, got %v", err)
+	}
+	if !c.bad {
+		t.Fatal("transport error should mark connection bad")
+	}
+}
+
+func TestHandleServerErrorDoesNotMarkBadConn(t *testing.T) {
+	t.Parallel()
+
+	serverErr := &wire.StatusError{
+		SV: wire.StatusVector{
+			Errors: []wire.GDSError{{Code: 335544665, Message: "violation of PRIMARY or UNIQUE KEY constraint"}},
+		},
+	}
+	c := &conn{}
+	err := c.handleFatalErrorLocked(serverErr)
+	if err != serverErr {
+		t.Fatalf("handleFatalErrorLocked() = %v, want original server error", err)
+	}
+	if c.bad {
+		t.Fatal("server-side SQL errors should not mark the connection bad")
+	}
+}
+
+func TestWithCancelStopReturnsSynchronously(t *testing.T) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c := &conn{}
+		for range 100 {
+			ctx, cancel := context.WithCancel(context.Background())
+			stop := c.withCancel(ctx)
+			stop()
+			cancel()
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("withCancel stop did not wait for cancellation goroutine to exit")
 	}
 }

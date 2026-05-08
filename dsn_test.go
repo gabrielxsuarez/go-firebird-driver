@@ -58,7 +58,7 @@ func TestParseDSNDatabasePathCompatibility(t *testing.T) {
 }
 
 func TestParseDSNDefaultsAndParams(t *testing.T) {
-	cfg, err := ParseDSN("user:password@localhost/dbname?charset=WIN1251&dialect=1&role=ADMIN&wire_crypt=disabled&fetch_size=500")
+	cfg, err := ParseDSN("user:password@localhost/dbname?charset=WIN1251&dialect=1&role=ADMIN&wire_crypt=disabled&fetch_size=500&data_type_bind=TIME+ZONE+TO+EXTENDED&session_time_zone=America%2FNew_York")
 	if err != nil {
 		t.Fatalf("ParseDSN() error = %v", err)
 	}
@@ -86,6 +86,52 @@ func TestParseDSNDefaultsAndParams(t *testing.T) {
 	}
 	if cfg.FetchSize != 500 {
 		t.Fatalf("FetchSize = %d, want 500", cfg.FetchSize)
+	}
+	if cfg.DataTypeBind != "TIME ZONE TO EXTENDED" {
+		t.Fatalf("DataTypeBind = %q, want TIME ZONE TO EXTENDED", cfg.DataTypeBind)
+	}
+	if cfg.SessionTimeZone != "America/New_York" {
+		t.Fatalf("SessionTimeZone = %q, want America/New_York", cfg.SessionTimeZone)
+	}
+}
+
+func TestParseDSNDataTypeBindAliases(t *testing.T) {
+	tests := []string{
+		"dataTypeBind",
+		"data_type_bind",
+		"set_bind",
+		"isc_dpb_set_bind",
+	}
+	for _, key := range tests {
+		t.Run(key, func(t *testing.T) {
+			cfg, err := ParseDSN("user:password@localhost/dbname?" + key + "=timestamp+with+time+zone+to+legacy")
+			if err != nil {
+				t.Fatalf("ParseDSN() error = %v", err)
+			}
+			if cfg.DataTypeBind != "timestamp with time zone to legacy" {
+				t.Fatalf("DataTypeBind = %q", cfg.DataTypeBind)
+			}
+		})
+	}
+}
+
+func TestParseDSNSessionTimeZoneAliases(t *testing.T) {
+	tests := []string{
+		"sessionTimeZone",
+		"session_time_zone",
+		"isc_dpb_session_time_zone",
+		"timezone",
+	}
+	for _, key := range tests {
+		t.Run(key, func(t *testing.T) {
+			cfg, err := ParseDSN("user:password@localhost/dbname?" + key + "=Europe%2FMadrid")
+			if err != nil {
+				t.Fatalf("ParseDSN() error = %v", err)
+			}
+			if cfg.SessionTimeZone != "Europe/Madrid" {
+				t.Fatalf("SessionTimeZone = %q", cfg.SessionTimeZone)
+			}
+		})
 	}
 }
 

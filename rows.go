@@ -202,8 +202,9 @@ func (r *rows) fetch() error {
 				}
 				data, err := r.conn.wc.ReadBlobData(r.txHandle, blobID)
 				if err != nil {
+					handled := r.conn.handleFatalErrorLocked(err)
 					r.conn.mu.Unlock()
-					return fmt.Errorf("read blob column %d: %w", ci, r.conn.handleFatalErrorLocked(err))
+					return fmt.Errorf("read blob column %d: %w", ci, handled)
 				}
 				if col.SubType == 1 {
 					row[ci] = fbcharset.Decode(fbcharset.CharsetID(r.conn.config.Charset), data) // text blob
