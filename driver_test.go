@@ -751,11 +751,14 @@ func TestConcurrentQueries(t *testing.T) {
 func TestLongVarchar(t *testing.T) {
 	db := openTestDB(t)
 	db.Exec("DROP TABLE TEST_LONG")
-	db.Exec(`CREATE TABLE TEST_LONG (ID INTEGER NOT NULL PRIMARY KEY, V VARCHAR(10000))`)
+	_, err := db.Exec(`CREATE TABLE TEST_LONG (ID INTEGER NOT NULL PRIMARY KEY, V VARCHAR(5000))`)
+	if err != nil {
+		t.Fatalf("CREATE: %v", err)
+	}
 	defer db.Exec("DROP TABLE TEST_LONG")
 
 	long := strings.Repeat("A", 5000)
-	_, err := db.Exec("INSERT INTO TEST_LONG VALUES (1, ?)", long)
+	_, err = db.Exec("INSERT INTO TEST_LONG VALUES (1, ?)", long)
 	if err != nil {
 		t.Fatalf("INSERT long: %v", err)
 	}

@@ -33,10 +33,19 @@ func CharsetName(id int32) string {
 
 // CharsetID returns the Firebird charset ID for a charset name.
 func CharsetID(name string) int32 {
-	if id, ok := charsetByName[name]; ok {
+	if id, ok := charsetByName[normalizeName(name)]; ok {
 		return id
 	}
 	return 0 // NONE
+}
+
+// CanonicalName returns the Firebird charset name for a user-provided name or
+// alias. The boolean is false when the name is unknown to this package.
+func CanonicalName(name string) (string, bool) {
+	if id, ok := charsetByName[normalizeName(name)]; ok {
+		return CharsetName(id), true
+	}
+	return strings.TrimSpace(name), false
 }
 
 // Decode converts text bytes from a Firebird charset to a Go UTF-8 string.
@@ -44,12 +53,15 @@ func Decode(id int32, data []byte) string {
 	if len(data) == 0 {
 		return ""
 	}
-	if isDirect(id) {
+	switch id {
+	case IDNone, IDOctets, IDUnicodeFSS, IDUTF8:
 		return string(data)
-	}
-	if id == IDISO88591 {
+	case IDASCII:
+		return decodeASCII(data)
+	case IDISO88591:
 		return decodeISO88591(data)
 	}
+
 	if enc := encodingForID(id); enc != nil {
 		if out, err := enc.NewDecoder().Bytes(data); err == nil {
 			return string(out)
@@ -60,12 +72,18 @@ func Decode(id int32, data []byte) string {
 
 // Encode converts a Go UTF-8 string to the requested Firebird charset.
 func Encode(id int32, s string) (string, error) {
-	if len(s) == 0 || isDirect(id) {
+	if len(s) == 0 {
 		return s, nil
 	}
-	if id == IDISO88591 {
+	switch id {
+	case IDNone, IDOctets, IDUnicodeFSS, IDUTF8:
+		return s, nil
+	case IDASCII:
+		return encodeASCII(s)
+	case IDISO88591:
 		return encodeISO88591(s)
 	}
+
 	if enc := encodingForID(id); enc != nil {
 		out, err := enc.NewEncoder().String(s)
 		if err != nil {
@@ -76,13 +94,36 @@ func Encode(id int32, s string) (string, error) {
 	return s, nil
 }
 
-func isDirect(id int32) bool {
-	switch id {
-	case IDNone, IDOctets, IDASCII, IDUnicodeFSS, IDUTF8:
-		return true
-	default:
-		return false
+func decodeASCII(data []byte) string {
+	for _, b := range data {
+		if b >= utf8.RuneSelf {
+			return decodeASCIISlow(data)
+		}
 	}
+	return string(data)
+}
+
+func decodeASCIISlow(data []byte) string {
+	var b strings.Builder
+	b.Grow(len(data))
+	for _, c := range data {
+		if c < utf8.RuneSelf {
+			b.WriteByte(c)
+		} else {
+			b.WriteRune(utf8.RuneError)
+		}
+	}
+	return b.String()
+}
+
+func encodeASCII(s string) (string, error) {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			r, _ := utf8.DecodeRuneInString(s[i:])
+			return "", fmt.Errorf("charset ASCII cannot encode rune %U", r)
+		}
+	}
+	return s, nil
 }
 
 func decodeISO88591(data []byte) string {
@@ -252,9 +293,29 @@ var charsets = map[int32]string{
 }
 
 var charsetByName = func() map[string]int32 {
-	m := make(map[string]int32, len(charsets))
+	m := make(map[string]int32, len(charsets)+24)
 	for id, name := range charsets {
 		m[name] = id
 	}
+	m["UTF_8"] = IDUTF8
+	m["ISO_8859_1"] = IDISO88591
+	m["ISO88591"] = IDISO88591
+	m["LATIN1"] = IDISO88591
+	m["LATIN_1"] = IDISO88591
+	for i := 0; i <= 8; i++ {
+		name := fmt.Sprintf("WIN125%d", i)
+		id, ok := m[name]
+		if !ok {
+			continue
+		}
+		m[fmt.Sprintf("CP125%d", i)] = id
+		m[fmt.Sprintf("WINDOWS_125%d", i)] = id
+	}
 	return m
 }()
+
+func normalizeName(name string) string {
+	name = strings.ToUpper(strings.TrimSpace(name))
+	name = strings.ReplaceAll(name, "-", "_")
+	return name
+}

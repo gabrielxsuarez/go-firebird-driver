@@ -102,3 +102,56 @@ func TestEncodeParamsISO88591UnsupportedRune(t *testing.T) {
 		t.Fatal("EncodeParamsErr error = nil, want charset conversion error")
 	}
 }
+
+func TestDecodeColumnOctetsVaryingReturnsBytes(t *testing.T) {
+	w := NewWriter()
+	want := []byte{0x00, 0x41, 0xff, 0x20}
+	w.WriteBuffer(want)
+
+	r := NewReader(bytes.NewReader(w.Bytes()))
+	desc := &ColumnDescriptor{SQLType: SQLVarying, SubType: 1, Length: 10}
+
+	value := DecodeColumn(r, desc)
+	got, ok := value.([]byte)
+	if !ok {
+		t.Fatalf("DecodeColumn type = %T, want []byte", value)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("DecodeColumn = % x, want % x", got, want)
+	}
+}
+
+func TestDecodeColumnOctetsTextKeepsPaddingAndReturnsBytes(t *testing.T) {
+	want := []byte{0x00, 0x41, 0xff, 0x20}
+	r := NewReader(bytes.NewReader(want))
+	desc := &ColumnDescriptor{SQLType: SQLText, SubType: 1, Length: int32(len(want))}
+
+	value := DecodeColumn(r, desc)
+	got, ok := value.([]byte)
+	if !ok {
+		t.Fatalf("DecodeColumn type = %T, want []byte", value)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("DecodeColumn = % x, want % x", got, want)
+	}
+}
+
+func TestEncodeParamsASCIIUnsupportedRune(t *testing.T) {
+	w := NewWriter()
+	descs := []ColumnDescriptor{{SQLType: SQLVarying, SubType: 2, Length: 50}}
+	values := []any{"cafe\u00e9"}
+
+	if err := EncodeParamsErr(w, descs, values); err == nil {
+		t.Fatal("EncodeParamsErr error = nil, want charset conversion error")
+	}
+}
+
+func TestEncodeParamsTextRejectsEncodedOverflow(t *testing.T) {
+	w := NewWriter()
+	descs := []ColumnDescriptor{{SQLType: SQLText, SubType: 21, Length: 4}}
+	values := []any{"ABCDE"}
+
+	if err := EncodeParamsErr(w, descs, values); err == nil {
+		t.Fatal("EncodeParamsErr error = nil, want text parameter too long")
+	}
+}

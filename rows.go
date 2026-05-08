@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	fbcharset "github.com/gabrielxsuarez/go-firebird-driver/internal/charset"
 	"github.com/gabrielxsuarez/go-firebird-driver/wire"
 )
 
@@ -182,7 +183,7 @@ func (r *rows) fetch() error {
 					return fmt.Errorf("read blob column %d: %w", ci, r.conn.handleFatalErrorLocked(err))
 				}
 				if col.SubType == 1 {
-					row[ci] = string(data) // text blob
+					row[ci] = fbcharset.Decode(fbcharset.CharsetID(r.conn.config.Charset), data) // text blob
 				} else {
 					row[ci] = data // binary blob
 				}
@@ -332,6 +333,9 @@ func (r *rows) ColumnTypeScanType(index int) reflect.Type {
 	sqlType := col.SQLType & ^int32(1) // strip nullable bit
 	switch sqlType {
 	case wire.SQLText, wire.SQLVarying:
+		if col.SubType == 1 {
+			return reflect.TypeOf([]byte{})
+		}
 		return reflect.TypeOf("")
 	case wire.SQLShort:
 		if col.Scale < 0 {

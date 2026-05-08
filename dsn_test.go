@@ -88,3 +88,23 @@ func TestParseDSNDefaultsAndParams(t *testing.T) {
 		t.Fatalf("FetchSize = %d, want 500", cfg.FetchSize)
 	}
 }
+
+func TestParseDSNCanonicalizesKnownCharsetAliases(t *testing.T) {
+	cfg, err := ParseDSN("user:password@localhost/dbname?charset=windows-1252")
+	if err != nil {
+		t.Fatalf("ParseDSN() error = %v", err)
+	}
+	if cfg.Charset != "WIN1252" {
+		t.Fatalf("Charset = %q, want WIN1252", cfg.Charset)
+	}
+}
+
+func TestParseDSNPreservesUnknownCharset(t *testing.T) {
+	cfg, err := ParseDSN("user:password@localhost/dbname?charset=CUSTOM_CHARSET")
+	if err != nil {
+		t.Fatalf("ParseDSN() error = %v", err)
+	}
+	if cfg.Charset != "CUSTOM_CHARSET" {
+		t.Fatalf("Charset = %q, want CUSTOM_CHARSET", cfg.Charset)
+	}
+}

@@ -168,15 +168,23 @@ func DecodeColumn(r *Reader, desc *ColumnDescriptor) any {
 			return ""
 		}
 		result = result[:length]
-		if desc.SubType != 1 { // not OCTETS
-			result = trimRightSpaces(result)
+		if desc.SubType == fbcharset.IDOctets {
+			out := make([]byte, len(result))
+			copy(out, result)
+			return out
 		}
+		result = trimRightSpaces(result)
 		return fbcharset.Decode(desc.SubType, result)
 
 	case SQLVarying:
 		data := r.ReadBuffer()
 		if r.Err() != nil {
 			return ""
+		}
+		if desc.SubType == fbcharset.IDOctets {
+			out := make([]byte, len(data))
+			copy(out, data)
+			return out
 		}
 		return fbcharset.Decode(desc.SubType, data)
 
@@ -422,22 +430,36 @@ func EncodeNamedParamsStackErr(w *StackWriter, descs []ColumnDescriptor, values 
 }
 
 func copyTextParam(dst []byte, desc *ColumnDescriptor, value any) error {
-	var n int
+	var data string
+	var raw []byte
 	switch v := value.(type) {
 	case string:
 		s, err := fbcharset.Encode(desc.SubType, v)
 		if err != nil {
 			return err
 		}
-		n = copy(dst, s)
+		data = s
 	case []byte:
-		n = copy(dst, v)
+		raw = v
 	default:
 		s, err := fbcharset.Encode(desc.SubType, toString(value))
 		if err != nil {
 			return err
 		}
-		n = copy(dst, s)
+		data = s
+	}
+
+	var n int
+	if raw != nil {
+		if len(raw) > len(dst) {
+			return fmt.Errorf("text parameter too long: encoded length %d exceeds field length %d", len(raw), len(dst))
+		}
+		n = copy(dst, raw)
+	} else {
+		if len(data) > len(dst) {
+			return fmt.Errorf("text parameter too long for charset %s: encoded length %d exceeds field length %d", fbcharset.CharsetName(desc.SubType), len(data), len(dst))
+		}
+		n = copy(dst, data)
 	}
 	for i := n; i < len(dst); i++ {
 		dst[i] = 0x20

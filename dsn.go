@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	fbcharset "github.com/gabrielxsuarez/go-firebird-driver/internal/charset"
 	"github.com/gabrielxsuarez/go-firebird-driver/wire"
 )
 
@@ -73,7 +74,11 @@ func ParseDSN(dsn string) (*Config, error) {
 		val := values[0]
 		switch strings.ToLower(key) {
 		case "charset":
-			cfg.Charset = val
+			if canonical, ok := fbcharset.CanonicalName(val); ok {
+				cfg.Charset = canonical
+			} else {
+				cfg.Charset = val
+			}
 		case "dialect":
 			d, err := strconv.ParseUint(val, 10, 32)
 			if err != nil {

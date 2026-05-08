@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	fbcharset "github.com/gabrielxsuarez/go-firebird-driver/internal/charset"
 	"github.com/gabrielxsuarez/go-firebird-driver/wire"
 )
 
@@ -577,7 +578,15 @@ func (c *conn) materializeNamedBlobs(txHandle int32, cols []wire.ColumnDescripto
 		case []byte:
 			blobData = v
 		case string:
-			blobData = []byte(v)
+			if col.SubType == 1 {
+				s, err := fbcharset.Encode(fbcharset.CharsetID(c.config.Charset), v)
+				if err != nil {
+					return fmt.Errorf("encode text blob param %d: %w", i, err)
+				}
+				blobData = []byte(s)
+			} else {
+				blobData = []byte(v)
+			}
 		default:
 			continue
 		}
