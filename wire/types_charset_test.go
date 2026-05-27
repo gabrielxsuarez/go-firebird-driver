@@ -58,6 +58,25 @@ func TestEncodeParamsISO88591Varying(t *testing.T) {
 	}
 }
 
+func TestEncodeParamsISO88591VaryingPadsWithSpaces(t *testing.T) {
+	w := NewWriter()
+	descs := []ColumnDescriptor{{SQLType: SQLVarying, SubType: 21, Length: 50}}
+	values := []any{"ABC"}
+
+	if err := EncodeParamsErr(w, descs, values); err != nil {
+		t.Fatalf("EncodeParamsErr: %v", err)
+	}
+
+	want := []byte{
+		0, 0, 0, 0,
+		0, 0, 0, 3,
+		'A', 'B', 'C', ' ',
+	}
+	if !bytes.Equal(w.Bytes(), want) {
+		t.Fatalf("EncodeParamsErr = % x, want % x", w.Bytes(), want)
+	}
+}
+
 func TestEncodeParamsOptimalISO88591Varying(t *testing.T) {
 	descs := []ColumnDescriptor{{SQLType: SQLVarying, SubType: 21, Length: 50}}
 	values := []driver.NamedValue{{Ordinal: 1, Value: "VARTA\u00a0CR"}}
@@ -75,6 +94,26 @@ func TestEncodeParamsOptimalISO88591Varying(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("EncodeParamsOptimalErr = % x, want % x", got, want)
+	}
+}
+
+func TestEncodeParamsVaryingRejectsEncodedOverflow(t *testing.T) {
+	w := NewWriter()
+	descs := []ColumnDescriptor{{SQLType: SQLVarying, SubType: 21, Length: 4}}
+	values := []any{"ABCDE"}
+
+	if err := EncodeParamsErr(w, descs, values); err == nil {
+		t.Fatal("EncodeParamsErr error = nil, want varying parameter too long")
+	}
+}
+
+func TestEncodeParamsOptimalVaryingRejectsEncodedOverflow(t *testing.T) {
+	descs := []ColumnDescriptor{{SQLType: SQLVarying, SubType: 21, Length: 4}}
+	values := []driver.NamedValue{{Ordinal: 1, Value: "ABCDE"}}
+
+	var sw StackWriter
+	if _, err := EncodeParamsOptimalErr(&sw, descs, values); err == nil {
+		t.Fatal("EncodeParamsOptimalErr error = nil, want varying parameter too long")
 	}
 }
 

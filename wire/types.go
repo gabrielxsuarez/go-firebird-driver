@@ -518,6 +518,52 @@ func copyTextParam(dst []byte, desc *ColumnDescriptor, value any) error {
 	return nil
 }
 
+func varyingPaddingByte(desc *ColumnDescriptor) byte {
+	if desc.SubType == fbcharset.IDOctets {
+		return 0x00
+	}
+	return 0x20
+}
+
+func writeVaryingParam(w *Writer, desc *ColumnDescriptor, data []byte) error {
+	if len(data) > int(desc.Length) {
+		return fmt.Errorf("varying parameter too long for charset %s: encoded length %d exceeds field length %d", fbcharset.CharsetName(desc.SubType), len(data), desc.Length)
+	}
+	l := len(data)
+	pad := (4 - l) & 3
+	w.grow(4 + l + pad)
+	binary.BigEndian.PutUint32(w.buf[w.n:], uint32(l))
+	w.n += 4
+	copy(w.buf[w.n:], data)
+	w.n += l
+	for i := 0; i < pad; i++ {
+		w.buf[w.n+i] = varyingPaddingByte(desc)
+	}
+	w.n += pad
+	return nil
+}
+
+func writeVaryingParamStack(w *StackWriter, desc *ColumnDescriptor, data []byte) error {
+	if len(data) > int(desc.Length) {
+		return fmt.Errorf("varying parameter too long for charset %s: encoded length %d exceeds field length %d", fbcharset.CharsetName(desc.SubType), len(data), desc.Length)
+	}
+	l := len(data)
+	pad := (4 - l) & 3
+	if w.n+4+l+pad > len(w.buf) {
+		w.overflow = true
+		return nil
+	}
+	binary.BigEndian.PutUint32(w.buf[w.n:], uint32(l))
+	w.n += 4
+	copy(w.buf[w.n:], data)
+	w.n += l
+	for i := 0; i < pad; i++ {
+		w.buf[w.n+i] = varyingPaddingByte(desc)
+	}
+	w.n += pad
+	return nil
+}
+
 // encodeValueStack encodes a single value into a StackWriter.
 func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) error {
 	sqlType := desc.SQLType & ^int32(1)
@@ -604,15 +650,15 @@ func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) error {
 			if err != nil {
 				return err
 			}
-			w.WriteString(s)
+			return writeVaryingParamStack(w, desc, []byte(s))
 		case []byte:
-			w.WriteBuffer(v)
+			return writeVaryingParamStack(w, desc, v)
 		default:
 			s, err := fbcharset.Encode(desc.SubType, toString(value))
 			if err != nil {
 				return err
 			}
-			w.WriteString(s)
+			return writeVaryingParamStack(w, desc, []byte(s))
 		}
 
 	case SQLBlob:
@@ -794,15 +840,15 @@ func encodeValue(w *Writer, desc *ColumnDescriptor, value any) error {
 			if err != nil {
 				return err
 			}
-			w.WriteString(s)
+			return writeVaryingParam(w, desc, []byte(s))
 		case []byte:
-			w.WriteBuffer(v)
+			return writeVaryingParam(w, desc, v)
 		default:
 			s, err := fbcharset.Encode(desc.SubType, toString(value))
 			if err != nil {
 				return err
 			}
-			w.WriteString(s)
+			return writeVaryingParam(w, desc, []byte(s))
 		}
 
 	case SQLBlob:
