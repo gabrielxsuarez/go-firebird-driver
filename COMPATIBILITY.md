@@ -59,7 +59,7 @@ Known limitation:
 
 ## Errors
 
-- Server errors are `*wire.StatusError` (inspect with `errors.As`); `GDSCode()` returns the
+- Server errors are `*firebird.Error` (inspect with `errors.As`); `GDSCode()` returns the
   primary GDS code and the full status vector is available in `SV`.
 - Error strings render the complete GDS chain with the embedded Firebird message templates
   (e.g. `unsuccessful metadata update; DROP TABLE X failed; ... (GDS 335544351)`).

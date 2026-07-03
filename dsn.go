@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	fbcharset "github.com/gabrielxsuarez/go-firebird-driver/internal/charset"
-	"github.com/gabrielxsuarez/go-firebird-driver/wire"
+	"github.com/gabrielxsuarez/go-firebird-driver/internal/wire"
 )
 
 // Config holds parsed DSN parameters.

@@ -1,6 +1,6 @@
 package firebird
 
-import "github.com/gabrielxsuarez/go-firebird-driver/wire"
+import "github.com/gabrielxsuarez/go-firebird-driver/internal/wire"
 
 // Error is the type carried by every server-reported error. It is an alias of
 // wire.StatusError so callers can inspect Firebird errors without importing

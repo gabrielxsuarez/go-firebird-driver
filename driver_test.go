@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gabrielxsuarez/go-firebird-driver/wire"
+	"github.com/gabrielxsuarez/go-firebird-driver/internal/wire"
 )
 
 func defaultTestDSN(version string) string {

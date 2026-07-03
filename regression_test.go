@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gabrielxsuarez/go-firebird-driver/wire"
+	"github.com/gabrielxsuarez/go-firebird-driver/internal/wire"
 )
 
 // Bug: BOOLEAN bindeado como parámetro se codificaba con el byte significativo

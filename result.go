@@ -4,7 +4,7 @@ import (
 	"database/sql/driver"
 	"fmt"
 
-	"github.com/gabrielxsuarez/go-firebird-driver/wire"
+	"github.com/gabrielxsuarez/go-firebird-driver/internal/wire"
 )
 
 // result implements driver.Result. The row count is computed eagerly, under

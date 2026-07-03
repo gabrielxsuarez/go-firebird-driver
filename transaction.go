@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/gabrielxsuarez/go-firebird-driver/wire"
+	"github.com/gabrielxsuarez/go-firebird-driver/internal/wire"
 )
 
 // transaction implements driver.Tx.

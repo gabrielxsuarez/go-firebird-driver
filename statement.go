@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql/driver"
 
-	"github.com/gabrielxsuarez/go-firebird-driver/wire"
+	"github.com/gabrielxsuarez/go-firebird-driver/internal/wire"
 )
 
 // stmt implements driver.Stmt and optional context interfaces.

@@ -36,7 +36,7 @@ if (-not $hasIntegration) {
 
 function Invoke-Unit {
     Invoke-Step "Unit and wire tests" {
-        go test ./internal/... ./wire/...
+        go test ./internal/... ./internal/wire/...
     }
     Invoke-Step "DSN and local driver contract tests" {
         go test -run "TestParseDSN|TestHandle|TestWithCancel|TestBuildConnectDPB" .
@@ -55,7 +55,7 @@ function Invoke-Integration {
 function Invoke-Race {
     if (-not $hasIntegration) {
         Invoke-Step "Race tests without integration DSN" {
-            go test -race ./internal/... ./wire/...
+            go test -race ./internal/... ./internal/wire/...
         }
         return
     }
@@ -69,19 +69,19 @@ function Invoke-Fuzz {
         go test . "-run=^$" -fuzz=FuzzParseDSN "-fuzztime=$($FuzzSeconds)s"
     }
     Invoke-Step "Fuzz ParseInfoBuffer" {
-        go test ./wire "-run=^$" -fuzz=FuzzParseInfoBuffer "-fuzztime=$($FuzzSeconds)s"
+        go test ./internal/wire "-run=^$" -fuzz=FuzzParseInfoBuffer "-fuzztime=$($FuzzSeconds)s"
     }
     Invoke-Step "Fuzz ParseSQLDescribeInfo" {
-        go test ./wire "-run=^$" -fuzz=FuzzParseSQLDescribeInfo "-fuzztime=$($FuzzSeconds)s"
+        go test ./internal/wire "-run=^$" -fuzz=FuzzParseSQLDescribeInfo "-fuzztime=$($FuzzSeconds)s"
     }
     Invoke-Step "Fuzz ParseRecordCounts" {
-        go test ./wire "-run=^$" -fuzz=FuzzParseRecordCounts "-fuzztime=$($FuzzSeconds)s"
+        go test ./internal/wire "-run=^$" -fuzz=FuzzParseRecordCounts "-fuzztime=$($FuzzSeconds)s"
     }
 }
 
 function Invoke-Bench {
     Invoke-Step "Wire benchmarks" {
-        go test ./wire "-run=^$" -bench="^(BenchmarkRead|BenchmarkWrite|BenchmarkArc4|BenchmarkChaCha|BenchmarkCrypt|BenchmarkEncodeParams|BenchmarkEstimate|BenchmarkStackWriter|BenchmarkToString|BenchmarkRepeatZeros|BenchmarkScaledInt)" -benchmem "-count=$BenchCount"
+        go test ./internal/wire "-run=^$" -bench="^(BenchmarkRead|BenchmarkWrite|BenchmarkArc4|BenchmarkChaCha|BenchmarkCrypt|BenchmarkEncodeParams|BenchmarkEstimate|BenchmarkStackWriter|BenchmarkToString|BenchmarkRepeatZeros|BenchmarkScaledInt)" -benchmem "-count=$BenchCount"
     }
     Invoke-Step "Charset benchmarks" {
         go test ./internal/charset "-run=^$" "-bench=." -benchmem "-count=$BenchCount"

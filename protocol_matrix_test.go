@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gabrielxsuarez/go-firebird-driver/wire"
+	"github.com/gabrielxsuarez/go-firebird-driver/internal/wire"
 )
 
 // La versión de protocolo negociada debe crecer con la versión del servidor:

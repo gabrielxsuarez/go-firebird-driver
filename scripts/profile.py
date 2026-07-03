@@ -38,21 +38,21 @@ REQUIRED_PORT = PORTS["FB3"]  # minimum for driver benchmarks
 BENCH_CATEGORIES = [
     {
         "name": "XDR Encoding/Decoding",
-        "package": "./wire/...",
+        "package": "./internal/wire/...",
         "pattern": "^(BenchmarkRead|BenchmarkWrite)",
         "needs_server": False,
         "prof_prefix": "xdr",
     },
     {
         "name": "Encryption",
-        "package": "./wire/...",
+        "package": "./internal/wire/...",
         "pattern": "^(BenchmarkArc4|BenchmarkChaCha|BenchmarkCrypt)",
         "needs_server": False,
         "prof_prefix": "crypt",
     },
     {
         "name": "Parameter Encoding",
-        "package": "./wire/...",
+        "package": "./internal/wire/...",
         "pattern": "^(BenchmarkEncodeParams|BenchmarkEstimate|BenchmarkStackWriter|BenchmarkToString|BenchmarkRepeatZeros|BenchmarkScaledInt)",
         "needs_server": False,
         "prof_prefix": "params",

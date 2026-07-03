@@ -12,7 +12,7 @@ import (
 	"time"
 
 	fbcharset "github.com/gabrielxsuarez/go-firebird-driver/internal/charset"
-	"github.com/gabrielxsuarez/go-firebird-driver/wire"
+	"github.com/gabrielxsuarez/go-firebird-driver/internal/wire"
 )
 
 // conn implements driver.Conn and all optional interfaces.
