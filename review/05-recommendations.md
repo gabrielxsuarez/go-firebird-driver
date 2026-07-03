@@ -82,6 +82,17 @@ ver la sección de abajo, completada al ejecutarlo.
 6. Batch API (op_batch, FB4+); streaming de blobs; helper types numéricos.
 7. Refactor diferido: unificar caminos ad-hoc vs preparado (`review/025-architecture.md`).
 
-## Resultado del soak final
+## Resultado del soak final (2026-07-03, 30 min, reporte crudo en `review/bench/soak_final.txt`)
 
-(completado al cierre de la fase — ver `review/bench/soak_final.txt` para el reporte crudo)
+- **302.571 operaciones exitosas**, 109,2M filas leídas, **15.918 cancelaciones por
+  contexto** limpias; 16 workers sobre pool de 8 con `ConnMaxLifetime=2m` (churn constante).
+- **Kill/restart real del servidor al minuto 12:20** (contenedor FB3 parado 30s):
+  ops/s cayó a 0, los 1.936 errores del outage se clasificaron todos como errores de
+  conexión (cero errores SQL, cero pánicos, cero errores mal clasificados — incluso un
+  `op_commit` en vuelo al morir el server salió como error de conexión limpio), las
+  goroutines *bajaron* durante el outage (workers en backoff, no acumulación), y
+  **recuperación completa en 20s** tras el reinicio con throughput idéntico al previo
+  (~171-175 ops/s antes y después).
+- **Sin fugas**: goroutines baseline=3 → final=1 tras Close+GC; heap 0,5MB → 0,5MB;
+  heap estable en 2-4MB durante los 30 minutos bajo carga.
+- **VEREDICTO: OK** — cero errores SQL inesperados en toda la corrida.
