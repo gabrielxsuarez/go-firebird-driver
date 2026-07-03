@@ -2,47 +2,47 @@ goos: windows
 goarch: amd64
 pkg: github.com/gabrielxsuarez/go-firebird-driver/bench/compare
 cpu: Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz
-BenchmarkConnect-8           	      16	  66766494 ns/op	  565194 B/op	    3124 allocs/op
-BenchmarkConnect-8           	      19	  66769884 ns/op	  562541 B/op	    3114 allocs/op
-BenchmarkConnect-8           	      18	  66946800 ns/op	  561607 B/op	    3111 allocs/op
-BenchmarkConnect-8           	      18	  65905839 ns/op	  563349 B/op	    3118 allocs/op
-BenchmarkConnect-8           	      18	  66052461 ns/op	  562896 B/op	    3118 allocs/op
-BenchmarkConnect-8           	      18	  68007189 ns/op	  563452 B/op	    3118 allocs/op
-BenchmarkSelect1Prepared-8   	    1668	    758411 ns/op	    8142 B/op	     105 allocs/op
-BenchmarkSelect1Prepared-8   	    1390	    725899 ns/op	    8139 B/op	     104 allocs/op
-BenchmarkSelect1Prepared-8   	    1402	    964415 ns/op	    8141 B/op	     104 allocs/op
-BenchmarkSelect1Prepared-8   	    1704	    738025 ns/op	    8138 B/op	     104 allocs/op
-BenchmarkSelect1Prepared-8   	    1528	    846047 ns/op	    8138 B/op	     104 allocs/op
-BenchmarkSelect1Prepared-8   	    1094	    955311 ns/op	    8141 B/op	     104 allocs/op
-BenchmarkFetch10kx10-8       	       8	 133695612 ns/op	     74797 rows/s	 7797503 B/op	  480230 allocs/op
-BenchmarkFetch10kx10-8       	       8	 134173700 ns/op	     74530 rows/s	 7797547 B/op	  480230 allocs/op
-BenchmarkFetch10kx10-8       	       8	 133217388 ns/op	     75065 rows/s	 7797551 B/op	  480230 allocs/op
-BenchmarkFetch10kx10-8       	       8	 135208225 ns/op	     73960 rows/s	 7797563 B/op	  480231 allocs/op
-BenchmarkFetch10kx10-8       	       8	 133393600 ns/op	     74967 rows/s	 7797607 B/op	  480231 allocs/op
-BenchmarkFetch10kx10-8       	       8	 134047575 ns/op	     74601 rows/s	 7797551 B/op	  480230 allocs/op
-BenchmarkInsertPrepared-8    	    3441	    360083 ns/op	    4886 B/op	     105 allocs/op
-BenchmarkInsertPrepared-8    	    3405	    359441 ns/op	    4886 B/op	     105 allocs/op
-BenchmarkInsertPrepared-8    	    3804	    340336 ns/op	    4887 B/op	     105 allocs/op
-BenchmarkInsertPrepared-8    	    2962	    374215 ns/op	    4887 B/op	     105 allocs/op
-BenchmarkInsertPrepared-8    	    2892	    355445 ns/op	    4884 B/op	     105 allocs/op
-BenchmarkInsertPrepared-8    	    3726	    358395 ns/op	    4886 B/op	     105 allocs/op
-BenchmarkBlob1KB-8           	     810	   1280123 ns/op	   0.80 MB/s	   18866 B/op	     198 allocs/op
-BenchmarkBlob1KB-8           	     960	   1401295 ns/op	   0.73 MB/s	   18870 B/op	     198 allocs/op
-BenchmarkBlob1KB-8           	     940	   1319539 ns/op	   0.78 MB/s	   18871 B/op	     198 allocs/op
-BenchmarkBlob1KB-8           	     908	   1324828 ns/op	   0.77 MB/s	   18869 B/op	     198 allocs/op
-BenchmarkBlob1KB-8           	     927	   1194634 ns/op	   0.86 MB/s	   18867 B/op	     198 allocs/op
-BenchmarkBlob1KB-8           	     956	   1175344 ns/op	   0.87 MB/s	   18869 B/op	     198 allocs/op
-BenchmarkBlob1MB-8           	       9	 133250944 ns/op	   7.87 MB/s	 9582084 B/op	   15601 allocs/op
-BenchmarkBlob1MB-8           	       9	 114791656 ns/op	   9.13 MB/s	 9582205 B/op	   15603 allocs/op
-BenchmarkBlob1MB-8           	       9	 115378422 ns/op	   9.09 MB/s	 9582226 B/op	   15603 allocs/op
-BenchmarkBlob1MB-8           	       9	 124464322 ns/op	   8.42 MB/s	 9582205 B/op	   15603 allocs/op
-BenchmarkBlob1MB-8           	       9	 124480078 ns/op	   8.42 MB/s	 9582082 B/op	   15601 allocs/op
-BenchmarkBlob1MB-8           	      10	 109279260 ns/op	   9.60 MB/s	 9582190 B/op	   15603 allocs/op
-BenchmarkPool20-8            	   14409	     81961 ns/op	    8253 B/op	     106 allocs/op
-BenchmarkPool20-8            	   14527	     83226 ns/op	    8253 B/op	     106 allocs/op
-BenchmarkPool20-8            	   15105	     83597 ns/op	    8252 B/op	     106 allocs/op
-BenchmarkPool20-8            	   14559	     80531 ns/op	    8251 B/op	     106 allocs/op
-BenchmarkPool20-8            	   13448	     81489 ns/op	    8252 B/op	     106 allocs/op
-BenchmarkPool20-8            	   14416	     80168 ns/op	    8252 B/op	     106 allocs/op
+BenchmarkConnect-8           	      18	  61817633 ns/op	  542361 B/op	    3082 allocs/op
+BenchmarkConnect-8           	      16	  64529881 ns/op	  544227 B/op	    3091 allocs/op
+BenchmarkConnect-8           	      16	  66680550 ns/op	  543608 B/op	    3090 allocs/op
+BenchmarkConnect-8           	      18	  69386783 ns/op	  542516 B/op	    3084 allocs/op
+BenchmarkConnect-8           	      18	  66238317 ns/op	  543544 B/op	    3088 allocs/op
+BenchmarkConnect-8           	      19	  66683905 ns/op	  543599 B/op	    3089 allocs/op
+BenchmarkSelect1Prepared-8   	    3134	    376290 ns/op	     965 B/op	      62 allocs/op
+BenchmarkSelect1Prepared-8   	    3388	    342778 ns/op	     962 B/op	      62 allocs/op
+BenchmarkSelect1Prepared-8   	    3324	    378267 ns/op	     965 B/op	      62 allocs/op
+BenchmarkSelect1Prepared-8   	    3421	    347140 ns/op	     960 B/op	      62 allocs/op
+BenchmarkSelect1Prepared-8   	    3422	    360182 ns/op	     961 B/op	      62 allocs/op
+BenchmarkSelect1Prepared-8   	    3301	    376286 ns/op	     960 B/op	      62 allocs/op
+BenchmarkFetch10kx10-8       	      13	 132366700 ns/op	     75548 rows/s	 7759256 B/op	  500323 allocs/op
+BenchmarkFetch10kx10-8       	      12	 119335258 ns/op	     83798 rows/s	 7759294 B/op	  500321 allocs/op
+BenchmarkFetch10kx10-8       	      10	 127388710 ns/op	     78500 rows/s	 7759437 B/op	  500324 allocs/op
+BenchmarkFetch10kx10-8       	       8	 130003462 ns/op	     76921 rows/s	 7759305 B/op	  500322 allocs/op
+BenchmarkFetch10kx10-8       	       8	 129321975 ns/op	     77327 rows/s	 7759320 B/op	  500322 allocs/op
+BenchmarkFetch10kx10-8       	       8	 126547725 ns/op	     79022 rows/s	 7759367 B/op	  500323 allocs/op
+BenchmarkInsertPrepared-8    	    4287	    266385 ns/op	    1738 B/op	      62 allocs/op
+BenchmarkInsertPrepared-8    	    3708	    271764 ns/op	    1738 B/op	      62 allocs/op
+BenchmarkInsertPrepared-8    	    4446	    259044 ns/op	    1736 B/op	      62 allocs/op
+BenchmarkInsertPrepared-8    	    4496	    253518 ns/op	    1736 B/op	      62 allocs/op
+BenchmarkInsertPrepared-8    	    4658	    269535 ns/op	    1736 B/op	      62 allocs/op
+BenchmarkInsertPrepared-8    	    3922	    274526 ns/op	    1736 B/op	      62 allocs/op
+BenchmarkBlob1KB-8           	    1412	    712829 ns/op	   1.44 MB/s	    6779 B/op	     127 allocs/op
+BenchmarkBlob1KB-8           	    1677	    703145 ns/op	   1.46 MB/s	    6778 B/op	     127 allocs/op
+BenchmarkBlob1KB-8           	    1542	    700708 ns/op	   1.46 MB/s	    6778 B/op	     127 allocs/op
+BenchmarkBlob1KB-8           	    1732	    693946 ns/op	   1.48 MB/s	    6778 B/op	     127 allocs/op
+BenchmarkBlob1KB-8           	    1688	    705409 ns/op	   1.45 MB/s	    6778 B/op	     127 allocs/op
+BenchmarkBlob1KB-8           	    1442	    809878 ns/op	   1.26 MB/s	    6778 B/op	     127 allocs/op
+BenchmarkBlob1MB-8           	       9	 115001078 ns/op	   9.12 MB/s	 8471433 B/op	   13486 allocs/op
+BenchmarkBlob1MB-8           	       9	 117348578 ns/op	   8.94 MB/s	 8471508 B/op	   13487 allocs/op
+BenchmarkBlob1MB-8           	       8	 126106438 ns/op	   8.32 MB/s	 8471449 B/op	   13487 allocs/op
+BenchmarkBlob1MB-8           	       9	 118776422 ns/op	   8.83 MB/s	 8471444 B/op	   13487 allocs/op
+BenchmarkBlob1MB-8           	       9	 114164200 ns/op	   9.18 MB/s	 8471382 B/op	   13486 allocs/op
+BenchmarkBlob1MB-8           	       9	 119388811 ns/op	   8.78 MB/s	 8471407 B/op	   13486 allocs/op
+BenchmarkPool20-8            	   15489	     76874 ns/op	    1803 B/op	      95 allocs/op
+BenchmarkPool20-8            	   15242	     76532 ns/op	    1803 B/op	      95 allocs/op
+BenchmarkPool20-8            	   16071	     74680 ns/op	    1802 B/op	      95 allocs/op
+BenchmarkPool20-8            	   16238	     74474 ns/op	    1802 B/op	      95 allocs/op
+BenchmarkPool20-8            	   15976	     75675 ns/op	    1802 B/op	      95 allocs/op
+BenchmarkPool20-8            	   16021	     73642 ns/op	    1802 B/op	      95 allocs/op
 PASS
-ok  	github.com/gabrielxsuarez/go-firebird-driver/bench/compare	93.810s
+ok  	github.com/gabrielxsuarez/go-firebird-driver/bench/compare	93.602s
