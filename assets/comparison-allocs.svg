@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="500" viewBox="0 0 860 500" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<text x="24" y="30" font-size="19" font-weight="600" fill="#475569">Allocations por operación</text>
+<text x="24" y="50" font-size="12.5" fill="#64748b">menos es mejor · allocs/op</text>
+<rect x="530" y="20" width="12" height="12" rx="2" fill="#2563eb"/>
+<text x="548" y="30.5" font-size="12.5" fill="#475569">go-firebird-driver</text>
+<rect x="690" y="20" width="12" height="12" rx="2" fill="#a8b0bb"/>
+<text x="708" y="30.5" font-size="12.5" fill="#475569">nakagami v0.9.19</text>
+<text x="180" y="85" font-size="13" fill="#475569" text-anchor="end">Connect</text>
+<rect x="190" y="68" width="32.1" height="14" rx="2.5" fill="#2563eb"/>
+<text x="230.1" y="79.5" font-size="12" fill="#475569" font-weight="600">211</text>
+<rect x="190" y="86" width="470.0" height="14" rx="2.5" fill="#a8b0bb"/>
+<text x="668.0" y="97.5" font-size="12" fill="#64748b">3,089</text>
+<text x="180" y="143" font-size="13" fill="#475569" text-anchor="end">SELECT 1 preparado</text>
+<rect x="190" y="126" width="91.0" height="14" rx="2.5" fill="#2563eb"/>
+<text x="289.0" y="137.5" font-size="12" fill="#475569" font-weight="600">12</text>
+<rect x="190" y="144" width="470.0" height="14" rx="2.5" fill="#a8b0bb"/>
+<text x="668.0" y="155.5" font-size="12" fill="#64748b">62</text>
+<text x="180" y="201" font-size="13" fill="#475569" text-anchor="end">Fetch 10k×10</text>
+<rect x="190" y="184" width="121.9" height="14" rx="2.5" fill="#2563eb"/>
+<text x="319.9" y="195.5" font-size="12" fill="#475569" font-weight="600">130k</text>
+<rect x="190" y="202" width="470.0" height="14" rx="2.5" fill="#a8b0bb"/>
+<text x="668.0" y="213.5" font-size="12" fill="#64748b">500k</text>
+<text x="180" y="259" font-size="13" fill="#475569" text-anchor="end">INSERT preparado</text>
+<rect x="190" y="242" width="60.6" height="14" rx="2.5" fill="#2563eb"/>
+<text x="258.6" y="253.5" font-size="12" fill="#475569" font-weight="600">8</text>
+<rect x="190" y="260" width="470.0" height="14" rx="2.5" fill="#a8b0bb"/>
+<text x="668.0" y="271.5" font-size="12" fill="#64748b">62</text>
+<text x="180" y="317" font-size="13" fill="#475569" text-anchor="end">BLOB 1 KB</text>
+<rect x="190" y="300" width="62.9" height="14" rx="2.5" fill="#2563eb"/>
+<text x="260.9" y="311.5" font-size="12" fill="#475569" font-weight="600">17</text>
+<rect x="190" y="318" width="470.0" height="14" rx="2.5" fill="#a8b0bb"/>
+<text x="668.0" y="329.5" font-size="12" fill="#64748b">127</text>
+<text x="180" y="375" font-size="13" fill="#475569" text-anchor="end">BLOB 1 MB</text>
+<rect x="190" y="358" width="1.3" height="14" rx="2.5" fill="#2563eb"/>
+<text x="199.3" y="369.5" font-size="12" fill="#475569" font-weight="600">36</text>
+<rect x="190" y="376" width="470.0" height="14" rx="2.5" fill="#a8b0bb"/>
+<text x="668.0" y="387.5" font-size="12" fill="#64748b">13,487</text>
+<text x="180" y="433" font-size="13" fill="#475569" text-anchor="end">Pool 20 goroutines</text>
+<rect x="190" y="416" width="54.4" height="14" rx="2.5" fill="#2563eb"/>
+<text x="252.4" y="427.5" font-size="12" fill="#475569" font-weight="600">11</text>
+<rect x="190" y="434" width="470.0" height="14" rx="2.5" fill="#a8b0bb"/>
+<text x="668.0" y="445.5" font-size="12" fill="#64748b">95</text>
+<text x="24" y="488" font-size="11" fill="#64748b">Firebird 3.0.14 loopback · benchstat n=6 · 2026-07-03 · reproducible con bench/compare/ · barras normalizadas por escenario (más corto = mejor)</text>
+</svg>

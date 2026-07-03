@@ -82,18 +82,22 @@ BenchmarkQueryManyRows-8    7.33 ms/op    111.7 KiB/op  7627 allocs/op
 Allocation counts are identical to (or slightly better than) the 2026-05-08 baseline;
 that baseline's `ns/op` was measured cold and is superseded by this one.
 
-### Head-to-head vs nakagami/firebirdsql (2026-07-03, benchstat n=6)
+### Head-to-head vs nakagami/firebirdsql v0.9.19 (2026-07-03, benchstat n=6)
 
-Same server, same data, per-driver defaults. Full report: `review/03-performance.md`;
-reproduce with `bench/compare/`.
+Same server, same data, per-driver defaults. Full report: `COMPARISON.md` and
+`review/06-vs-nakagami.md`; reproduce with `bench/compare/`.
 
 ```text
-                    ours       nakagami    time delta   allocs (ours vs nak)
-Connect             62.8 ms    66.8 ms       +6%        211 vs 3118
-Select1Prepared      241 µs     802 µs     +232%         12 vs 104
-Fetch10kx10        108.8 ms   133.9 ms      +23%       130k vs 480k
-InsertPrepared       226 µs     359 µs      +59%          8 vs 105
-Blob1KB              573 µs    1300 µs     +127%         17 vs 198
-Blob1MB             24.8 ms   119.9 ms     +385%         36 vs 15603
-Pool20              83.0 µs    81.7 µs     tie (p=0.13)  11 vs 106
+                    ours       nakagami    time delta          allocs (ours vs nak)
+Connect             63.8 ms    66.5 ms     tie (p=0.18)        211 vs 3089
+Select1Prepared      254 µs     368 µs     +45%                 12 vs 62
+Fetch10kx10        107.1 ms   128.4 ms     +20%               130k vs 500k
+InsertPrepared       232 µs     268 µs     +15%                  8 vs 62
+Blob1KB              557 µs     704 µs     +26%                 17 vs 127
+Blob1MB             25.5 ms   118.1 ms     +363%                36 vs 13487
+Pool20                87 µs      79 µs     nakagami +10%        11 vs 95
 ```
+
+Pool20 is the one scenario nakagami wins (verified with interleaved runs); it is a
+backlog item (`review/06-vs-nakagami.md`). nakagami improved considerably between
+v0.9.15 and v0.9.19 — re-measure against their latest release before the 1.0 announce.

@@ -1,5 +1,11 @@
 # Fase 3 — Eficiencia: allocs, CPU, latencia (2026-07-03)
 
+> **Adenda (Fase 6)**: la tabla head-to-head de este informe midió nakagami **v0.9.15**.
+> En la Fase 6 se re-midió contra **v0.9.19** (última release), que mejoró varios caminos:
+> Connect pasó a empate, Select1 de 3.3× a 1.45×, y **Pool20 pasó a derrota nuestra por
+> ~10%** (backlog). Los números vigentes están en `COMPARISON.md` y
+> `review/06-vs-nakagami.md`; los raw en `review/bench/e2e_*.txt` (regenerados).
+
 Medición sistemática por capa y comparación head-to-head contra nakagami/firebirdsql.
 Raw data en `review/bench/` (micro) y `bench/compare/ours.txt`/`nak.txt` (e2e).
 

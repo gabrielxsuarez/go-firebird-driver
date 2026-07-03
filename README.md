@@ -16,6 +16,8 @@ For easier migrations, this package registers both `firebird` and `firebirdsql`.
 
 Use `firebird` in new code. The `firebirdsql` name is kept as a compatibility alias so existing `sql.Open("firebirdsql", ...)` calls do not need to change when switching imports.
 
+See [MIGRATION.md](MIGRATION.md) for the full migration guide (DSN parameter mapping and behavioral differences) and [COMPARISON.md](COMPARISON.md) for a verified feature and performance comparison.
+
 ## Quick Start
 
 ```go
@@ -56,23 +58,25 @@ The focus is on implementing the `database/sql` contract well, not on covering a
 ## Why Use It Instead of `nakagami/firebirdsql`
 
 In the head-to-head benchmarks in this repository (`bench/compare/`, same server, same data,
-`benchstat` n=6), `go-firebird-driver` was faster in 6 of 7 scenarios and allocated less
+`benchstat` n=6), `go-firebird-driver` was faster in 5 of 7 scenarios and allocated less
 memory in all 7:
 
-| Scenario | go-firebird-driver | nakagami/firebirdsql | Time | Allocations |
-|----------|-------------------:|---------------------:|-----:|------------:|
-| Connect (SRP + attach + detach) | 62.8 ms · 211 allocs | 66.8 ms · 3,118 allocs | **1.06x** | **14.8x fewer** |
-| Prepared `SELECT 1` | 241 µs · 12 allocs | 802 µs · 104 allocs | **3.3x faster** | **8.7x fewer** |
-| Fetch 10k rows × 10 columns | 108.8 ms · 130k allocs | 133.9 ms · 480k allocs | **1.2x faster** | **3.7x fewer** |
-| Prepared INSERT (batched tx) | 226 µs · 8 allocs | 359 µs · 105 allocs | **1.6x faster** | **13x fewer** |
-| 1 KB BLOB read | 573 µs · 17 allocs | 1,300 µs · 198 allocs | **2.3x faster** | **11.6x fewer** |
-| 1 MB BLOB read | 24.8 ms · 36 allocs | 119.9 ms · 15,603 allocs | **4.8x faster** | **433x fewer** |
-| Pool, 20 concurrent goroutines | 83.0 µs · 11 allocs | 81.7 µs · 106 allocs | tie (server-bound) | **9.6x fewer** |
+| Scenario | go-firebird-driver | nakagami/firebirdsql v0.9.19 | Time | Allocations |
+|----------|-------------------:|-----------------------------:|-----:|------------:|
+| Connect (SRP + attach + detach) | 63.8 ms · 211 allocs | 66.5 ms · 3,089 allocs | tie | **14.6x fewer** |
+| Prepared `SELECT 1` | 254 µs · 12 allocs | 368 µs · 62 allocs | **1.45x faster** | **5.2x fewer** |
+| Fetch 10k rows × 10 columns | 107.1 ms · 130k allocs | 128.4 ms · 500k allocs | **1.2x faster** | **3.9x fewer** |
+| Prepared INSERT (batched tx) | 232 µs · 8 allocs | 268 µs · 62 allocs | **1.15x faster** | **7.8x fewer** |
+| 1 KB BLOB read | 557 µs · 17 allocs | 704 µs · 127 allocs | **1.26x faster** | **7.5x fewer** |
+| 1 MB BLOB read | 25.5 ms · 36 allocs | 118.1 ms · 13,487 allocs | **4.6x faster** | **375x fewer** |
+| Pool, 20 concurrent goroutines | 87 µs · 11 allocs | 79 µs · 95 allocs | nakagami 1.10x faster | **8.6x fewer** |
 
-That matters because a database driver runs in the hot path of the application: fewer allocations mean less GC pressure, lower latency, and better stability under load.
+That matters because a database driver runs in the hot path of the application: fewer allocations mean less GC pressure, lower latency, and better stability under load. We publish the scenario nakagami wins too (Pool20, on our backlog) — the numbers are only useful if they're honest.
 
-> Measured 2026-07-03 against Firebird 3.0.14 on loopback (Windows/amd64, Go 1.26).
+> Measured 2026-07-03 against Firebird 3.0.14 on loopback (Windows/amd64, Go 1.26),
+> nakagami/firebirdsql v0.9.19 (latest release at measurement time).
 > Fully reproducible: see [bench/compare/README.md](bench/compare/README.md).
+> Full feature-by-feature comparison: [COMPARISON.md](COMPARISON.md).
 > Exact results will vary depending on network, server, dataset, and workload.
 
 ## Project Scope
