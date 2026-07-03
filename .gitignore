@@ -40,3 +40,6 @@ __pycache__/
 __debug_bin*
 
 /docs
+# Firebird databases (temp/bench)
+*.fdb
+*.FDB

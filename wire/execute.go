@@ -42,33 +42,6 @@ func (wc *WireConnection) Execute(stmtHandle, txHandle int32, blr, params []byte
 	return nil
 }
 
-// ExecuteAndCommit batches op_execute + op_commit into a single flush,
-// saving one network round-trip for auto-commit scenarios.
-func (wc *WireConnection) ExecuteAndCommit(stmtHandle, txHandle int32, blr, params []byte) error {
-	wc.writeExecuteOp(stmtHandle, txHandle, blr, params)
-
-	// Append op_commit to the same buffer
-	wc.writer.WriteInt32(opCommit)
-	wc.writer.WriteInt32(txHandle)
-
-	if err := wc.flush(); err != nil {
-		return fmt.Errorf("execute+commit: flush: %w", err)
-	}
-
-	// Read execute response
-	_, execErr := wc.readResponse()
-	// Always read commit response to keep wire in sync
-	_, commitErr := wc.reader.ReadResponse()
-
-	if execErr != nil {
-		return fmt.Errorf("execute+commit: execute: %w", execErr)
-	}
-	if commitErr != nil {
-		return fmt.Errorf("execute+commit: commit: %w", commitErr)
-	}
-	return nil
-}
-
 // ExecuteAndCommitRetaining batches op_execute + op_commit_retaining into a
 // single flush. The transaction handle remains valid for reuse.
 func (wc *WireConnection) ExecuteAndCommitRetaining(stmtHandle, txHandle int32, blr, params []byte) error {
@@ -89,49 +62,6 @@ func (wc *WireConnection) ExecuteAndCommitRetaining(stmtHandle, txHandle int32, 
 	}
 	if commitErr != nil {
 		return fmt.Errorf("execute+commit_retaining: commit_retaining: %w", commitErr)
-	}
-	return nil
-}
-
-// TransactionExecuteCommit batches op_transaction + op_execute + op_commit
-// into a single flush using deferred handle resolution (lazy send).
-// This reduces 3 round-trips to 1 for auto-commit prepared statements.
-// Requires lazySend to be negotiated (protocol v13+).
-func (wc *WireConnection) TransactionExecuteCommit(tpb []byte, stmtHandle int32, blr, params []byte) error {
-	// op_transaction
-	wc.writer.WriteInt32(opTransaction)
-	wc.writer.WriteInt32(0) // database handle (always 0)
-	wc.writer.WriteBuffer(tpb)
-
-	// op_execute with deferred txHandle (0xFFFF = resolve from previous response)
-	wc.writeExecuteOp(stmtHandle, int32(InvalidObject), blr, params)
-
-	// op_commit with deferred txHandle
-	wc.writer.WriteInt32(opCommit)
-	wc.writer.WriteInt32(int32(InvalidObject))
-
-	if err := wc.flush(); err != nil {
-		return fmt.Errorf("tx+execute+commit: flush: %w", err)
-	}
-
-	// Read all 3 responses
-	_, txErr := wc.readResponse()
-	if txErr != nil {
-		// Try to read remaining responses to keep wire in sync
-		wc.reader.ReadResponse()
-		wc.reader.ReadResponse()
-		return fmt.Errorf("tx+execute+commit: transaction: %w", txErr)
-	}
-
-	_, execErr := wc.reader.ReadResponse()
-	if execErr != nil {
-		wc.reader.ReadResponse()
-		return fmt.Errorf("tx+execute+commit: execute: %w", execErr)
-	}
-
-	_, commitErr := wc.reader.ReadResponse()
-	if commitErr != nil {
-		return fmt.Errorf("tx+execute+commit: commit: %w", commitErr)
 	}
 	return nil
 }
@@ -222,54 +152,6 @@ func (wc *WireConnection) Execute2(stmtHandle, txHandle int32, inBLR, params, ou
 	default:
 		return 0, nil, fmt.Errorf("op_execute2: unexpected opcode %d, expected %d or %d", op, opSQLResponse, opResponse)
 	}
-}
-
-// Fetch sends op_fetch and reads the response sequence.
-// blr should be provided for the first fetch, empty for subsequent.
-// Returns status (0=data, 100=EOF) and whether there is row data to read.
-func (wc *WireConnection) Fetch(stmtHandle int32, blr []byte, fetchSize int32) (int32, int32, error) {
-	wc.writer.WriteInt32(opFetch)
-	wc.writer.WriteInt32(stmtHandle)
-	wc.writer.WriteBuffer(blr)
-	wc.writer.WriteInt32(0)         // p_sqldata_message_number
-	wc.writer.WriteInt32(fetchSize) // p_sqldata_messages
-
-	if err := wc.flush(); err != nil {
-		return 0, 0, fmt.Errorf("op_fetch: flush: %w", err)
-	}
-
-	if err := wc.consumeDeferred(); err != nil {
-		return 0, 0, fmt.Errorf("op_fetch: consume deferred: %w", err)
-	}
-
-	op := wc.reader.ReadOpcode()
-	if wc.reader.Err() != nil {
-		return 0, 0, fmt.Errorf("op_fetch: read opcode: %w", wc.reader.Err())
-	}
-
-	if op != opFetchResponse {
-		if op == opResponse {
-			// El servidor reporta un error del statement (p.ej. excepción
-			// aritmética al evaluar una fila): consumir el cuerpo mantiene el
-			// stream sincronizado y expone el error real.
-			return 0, 0, fetchServerError(wc)
-		}
-		return 0, 0, fmt.Errorf("op_fetch: unexpected opcode %d, expected %d", op, opFetchResponse)
-	}
-
-	resp := wc.reader.readFetchResponse()
-	if wc.reader.Err() != nil {
-		return 0, 0, fmt.Errorf("op_fetch: read response: %w", wc.reader.Err())
-	}
-
-	return resp.Status, resp.Messages, nil
-}
-
-// FetchRows sends op_fetch and decodes all returned rows.
-// Returns decoded rows, whether EOF was reached, and any error.
-func (wc *WireConnection) FetchRows(stmtHandle int32, blr []byte, descs []ColumnDescriptor, fetchSize int32) ([][]any, bool, error) {
-	rows, _, eof, err := wc.FetchRowsReuse(stmtHandle, blr, descs, fetchSize, nil, nil)
-	return rows, eof, err
 }
 
 // FetchRowsReuse sends op_fetch and decodes all returned rows, reusing the

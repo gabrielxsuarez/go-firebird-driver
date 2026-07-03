@@ -1,7 +1,10 @@
 // Package wire implements the Firebird wire protocol encoding and operations.
 package wire
 
-//lint:file-ignore U1000 Protocol constants defined for use in later implementation phases.
+//lint:file-ignore U1000 Este archivo es el registro completo de constantes del wire
+// protocol (espejo de la spec, ver wire-protocol/). Se conservan tambien las constantes
+// de areas fuera del alcance 1.0 (services, events, batch) como documentacion declarativa
+// y para navegacion con la spec al lado; decision registrada en review/04-cleanup.md.
 
 // --- Operation codes (opcodes) ---
 

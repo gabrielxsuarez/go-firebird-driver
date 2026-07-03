@@ -441,15 +441,6 @@ func repeatZeros(n int) string {
 	return strings.Repeat("0", n)
 }
 
-// applyScale multiplies a value by 10^(-scale) for storage.
-func applyScale(v int64, scale int32) int64 {
-	// scale is negative; multiply by 10^|scale|
-	for i := int32(0); i > scale; i-- {
-		v *= 10
-	}
-	return v
-}
-
 // trimRightSpaces trims trailing 0x20 bytes.
 func trimRightSpaces(b []byte) []byte {
 	i := len(b)

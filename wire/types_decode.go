@@ -151,18 +151,6 @@ func DecodeColumn(r *Reader, desc *ColumnDescriptor) any {
 	}
 }
 
-// ReadNullBitset reads the null bitset for protocol 13+.
-// Returns a byte slice where bit N=1 means column N is null.
-// The returned slice is safe to use across subsequent read calls.
-func ReadNullBitset(r *Reader, colCount int) []byte {
-	byteCount := (colCount + 7) / 8
-	padded := (byteCount + 3) & ^3 // pad to 4-byte boundary
-	// Use a dedicated buffer so ReadBuffer/ReadOpaque don't overwrite the bitset.
-	buf := make([]byte, padded)
-	r.readFull(buf)
-	return buf[:byteCount]
-}
-
 // readNullBitsetInto reads the null bitset into a pre-allocated buffer.
 // buf must have capacity >= padded byte count (ceil(colCount/8) rounded up to 4).
 func readNullBitsetInto(r *Reader, colCount int, buf []byte) {

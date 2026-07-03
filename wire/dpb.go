@@ -73,12 +73,6 @@ func (b *DPBBuilder) WriteByteTag(tag byte, value byte) {
 	b.buf = append(b.buf, tag, 1, 0, 0, 0, value)
 }
 
-// WriteInt32LE appends a 4-byte little-endian int32 tag.
-func (b *DPBBuilder) WriteInt32LE(tag byte, value int32) {
-	b.buf = append(b.buf, tag, 4, 0, 0, 0,
-		byte(value), byte(value>>8), byte(value>>16), byte(value>>24))
-}
-
 // WriteBytes appends a raw byte value tag with 4-byte LE length.
 func (b *DPBBuilder) WriteBytes(tag byte, value []byte) {
 	n := len(value)

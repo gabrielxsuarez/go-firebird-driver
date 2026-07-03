@@ -40,12 +40,6 @@ func (b *TPBBuilder) WriteTag(tag byte) {
 	b.buf = append(b.buf, tag)
 }
 
-// WriteInt32LE appends a tag with 4-byte little-endian value.
-func (b *TPBBuilder) WriteInt32LE(tag byte, value int32) {
-	b.buf = append(b.buf, tag, 4,
-		byte(value), byte(value>>8), byte(value>>16), byte(value>>24))
-}
-
 // Bytes returns the built TPB.
 func (b *TPBBuilder) Bytes() []byte {
 	return b.buf

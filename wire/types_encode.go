@@ -117,12 +117,6 @@ func EstimateParamSize(descs []ColumnDescriptor, values []driver.NamedValue) int
 	return size
 }
 
-// EncodeNamedParamsStack encodes parameters using a StackWriter (stack-allocated buffer).
-// This avoids allocation and sync.Pool overhead for small parameter sets.
-func EncodeNamedParamsStack(w *StackWriter, descs []ColumnDescriptor, values []driver.NamedValue) {
-	_ = EncodeNamedParamsStackErr(w, descs, values)
-}
-
 // EncodeNamedParamsStackErr encodes parameters using a StackWriter and reports conversion errors.
 func EncodeNamedParamsStackErr(w *StackWriter, descs []ColumnDescriptor, values []driver.NamedValue) error {
 	colCount := len(descs)

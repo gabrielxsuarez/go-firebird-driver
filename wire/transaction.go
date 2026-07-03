@@ -63,20 +63,6 @@ func (wc *WireConnection) CommitRetaining(txHandle int32) error {
 	return nil
 }
 
-// RollbackRetaining sends op_rollback_retaining (handle remains valid).
-func (wc *WireConnection) RollbackRetaining(txHandle int32) error {
-	wc.writer.WriteInt32(opRollbackRetaining)
-	wc.writer.WriteInt32(txHandle)
-	if err := wc.flush(); err != nil {
-		return fmt.Errorf("op_rollback_retaining: flush: %w", err)
-	}
-	_, err := wc.readResponse()
-	if err != nil {
-		return fmt.Errorf("op_rollback_retaining: %w", err)
-	}
-	return nil
-}
-
 // InfoTransaction sends op_info_transaction and returns the raw info buffer.
 func (wc *WireConnection) InfoTransaction(txHandle int32, items []byte, bufferLength int32) ([]byte, error) {
 	wc.writer.WriteInt32(opInfoTransaction)

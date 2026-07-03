@@ -63,14 +63,6 @@ func supportedProtocols() []protocolDescriptor {
 	}
 }
 
-// Connect performs the full Firebird wire protocol handshake:
-// TCP connect → op_connect → auth loop → op_crypt → op_attach.
-// Returns a WireConnection ready for use.
-// Connect establishes a connection using context.Background.
-func Connect(cfg *ProtocolConfig) (*WireConnection, error) {
-	return ConnectContext(context.Background(), cfg)
-}
-
 // ConnectContext establishes a connection honoring ctx for the TCP dial and
 // the whole handshake (auth + crypt negotiation). Without a deadline here, a
 // server that accepts TCP but never answers would hang Connect forever and

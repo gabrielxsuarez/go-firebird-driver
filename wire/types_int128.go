@@ -51,13 +51,6 @@ func valueToInt128(value any, scale int32) ([16]byte, error) {
 	return stringToInt128Err(s, scale)
 }
 
-// stringToInt128 converts a string to 16 bytes big-endian two's complement INT128.
-// If scale < 0, the string value is multiplied by 10^(-scale).
-func stringToInt128(s string, scale int32) [16]byte {
-	result, _ := stringToInt128Err(s, scale)
-	return result
-}
-
 func stringToInt128Err(s string, scale int32) ([16]byte, error) {
 	var result [16]byte
 

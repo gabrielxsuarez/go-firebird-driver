@@ -4,36 +4,6 @@ package wire
 
 import "fmt"
 
-// AllocateStatement sends op_allocate_statement and returns the handle.
-func (wc *WireConnection) AllocateStatement() (int32, error) {
-	wc.writer.WriteInt32(opAllocateStatement)
-	wc.writer.WriteInt32(wc.dbHandle)
-
-	if err := wc.flush(); err != nil {
-		return 0, fmt.Errorf("op_allocate_statement: flush: %w", err)
-	}
-
-	resp, err := wc.readResponse()
-	if err != nil {
-		return 0, fmt.Errorf("op_allocate_statement: %w", err)
-	}
-	return resp.Handle, nil
-}
-
-// AllocateStatementLazy writes op_allocate_statement WITHOUT flushing (lazy send).
-// The caller must read the response later.
-func (wc *WireConnection) AllocateStatementLazy() {
-	wc.writer.WriteInt32(opAllocateStatement)
-	wc.writer.WriteInt32(wc.dbHandle)
-	wc.deferResponse()
-}
-
-// PrepareStatement sends op_prepare_statement and returns the descriptor info.
-// Uses the standard describe items for columns and parameters.
-func (wc *WireConnection) PrepareStatement(txHandle, stmtHandle int32, sql string, bufferLength int32) ([]byte, error) {
-	return wc.PrepareStatementWithItems(txHandle, stmtHandle, sql, bufferLength, PrepareInfoItems())
-}
-
 // PrepareStatementWithItems sends op_prepare_statement using a caller-provided
 // info item set. This allows lighter describe requests for exec-only paths.
 func (wc *WireConnection) PrepareStatementWithItems(txHandle, stmtHandle int32, sql string, bufferLength int32, items []byte) ([]byte, error) {

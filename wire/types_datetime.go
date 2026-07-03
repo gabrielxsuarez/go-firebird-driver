@@ -81,13 +81,6 @@ func TimestampToTime(mjd int32, ticks uint32) time.Time {
 		t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.UTC)
 }
 
-// TimestampTZToTime converts date + time + timezone value to time.Time.
-func TimestampTZToTime(mjd int32, ticks uint32, tzValue uint32) time.Time {
-	utcTime := TimestampToTime(mjd, ticks)
-	loc := timezone.Resolve(tzValue)
-	return utcTime.In(loc)
-}
-
 // TimestampTZExToTime converts date + time + timezone value + explicit offset
 // to time.Time. The explicit offset is authoritative for the returned value, so
 // a Go tzdata version mismatch cannot shift the decoded wall clock.
@@ -95,13 +88,6 @@ func TimestampTZExToTime(mjd int32, ticks uint32, tzValue uint32, offsetMinutes 
 	utcTime := TimestampToTime(mjd, ticks)
 	loc := fixedLocationForTZ(tzValue, offsetMinutes)
 	return utcTime.In(loc)
-}
-
-// TimeTZToTime converts UTC time ticks + timezone value to time.Time.
-func TimeTZToTime(ticks uint32, tzValue uint32) time.Time {
-	t := TicksToTime(ticks)
-	loc := timezone.Resolve(tzValue)
-	return t.In(loc)
 }
 
 // TimeTZExToTime converts UTC time ticks + timezone value + explicit offset to
