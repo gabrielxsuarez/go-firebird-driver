@@ -42,14 +42,32 @@ Shortcut:
 
 Keep these out of the normal test suite:
 
-- Kill/restart Firebird while a fetch is active.
+- Soak harness: `cd scripts/soak && go run . -duration 30m -out soak_report.txt`
+  (sustained mixed workload over a pool; samples goroutines/heap every 10s and writes a
+  report; tolerates and logs server outages, so the server may be killed/restarted
+  mid-run to exercise recovery). Last run: 2026-07-03, results in
+  `review/05-recommendations.md`.
+- Kill/restart Firebird while a fetch is active (done 2026-07-03, phase 2: fetch fails
+  <2s, pool recovers, no goroutine leak).
 - Kill/restart Firebird while reading or writing a large BLOB.
-- Run pool stress with `MaxOpenConns > 1` for several minutes.
-- Run application workloads from real projects for weeks/months and log any mismatch with `COMPATIBILITY.md`.
+- Run application workloads from real projects for weeks/months and log any mismatch
+  with `COMPATIBILITY.md` — **this is the release-candidate period for 1.0**.
 
-## Decisions To Close Before `v1.0.0`
+## Decisions Closed in the Pre-1.0 Review (2026-07-03)
 
-- BLOB streaming: required for `v1.0.0` or documented as future work.
-- High precision values: keep returning `string` or add optional helper types.
-- Timezone names: offset/wall-clock preservation is currently stable; exact IANA name preservation is not guaranteed.
-- Automation format: keep PowerShell script, add Makefile/Taskfile, or both.
+- Module path: `github.com/gabrielxsuarez/go-firebird-driver` is final.
+- Go minimum: 1.25 (required by current `golang.org/x/crypto`; do not lower by pinning
+  an old crypto dependency).
+- BLOB streaming, numerics-as-string (+`driver.Valuer`), timezone wall-clock+offset,
+  and no extended API in 1.0: resolved in `COMPATIBILITY.md` ("Resolved Contract
+  Decisions").
+- Automation: PowerShell only (`scripts/validate.ps1`); no Makefile for 1.0. CI is
+  deliberately out of scope until the project is published.
+
+## Before the Actual `v1.0.0` Tag (after the months-long real-world soak)
+
+- Re-run the full review gates (quick/race/fuzz/bench + FB3/FB4/FB5 suite).
+- **Re-measure `bench/compare/` against the then-latest nakagami release** and refresh
+  `COMPARISON.md`/README numbers (they improve quickly: 0.9.15→0.9.19 closed several gaps).
+- Re-read `COMPATIBILITY.md` against any issue found during the soak period.
+- Blockers list and backlog: `review/05-recommendations.md`.

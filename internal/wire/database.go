@@ -73,12 +73,6 @@ func (wc *WireConnection) CloseTransport() error {
 	return wc.conn.Close()
 }
 
-// deferResponse increments the deferred response counter.
-// The writer data is NOT flushed.
-func (wc *WireConnection) deferResponse() {
-	wc.deferredCount++
-}
-
 // consumeDeferred reads and discards all deferred responses.
 func (wc *WireConnection) consumeDeferred() error {
 	for wc.deferredCount > 0 {

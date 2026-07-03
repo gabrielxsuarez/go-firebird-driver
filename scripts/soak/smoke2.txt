@@ -1,0 +1,20 @@
+# soak go-firebird-driver
+# inicio=2026-07-03T15:42:11-03:00 duracion=1m0s workers=16 maxconns=8
+# dsn=firebird://***@localhost:3063//var/lib/firebird/data/driver.fdb?charset=UTF8
+# go=go1.26.4 GOMAXPROCS=8
+# setup OK (soak_rows=2000 filas, soak_blob=64KB)
+# baseline: goroutines=3 heapAlloc=0.5MB
+#
+# elapsed goroutines heapAlloc heapSys ops ops/s rowsRead sqlErrs connErrs cancels
+    10s     27     3.1MB   10.0MB      1738    174    618000    13     0    70
+    20s     27     3.7MB    9.8MB      3472    173   1256000    27     0   148
+    30s     27     3.5MB    9.7MB      5194    172   1878000    39     0   229
+    40s     27     2.3MB    9.8MB      6936    174   2518000    51     0   306
+    50s     27     2.5MB    9.6MB      8673    174   3144000    70     0   377
+   1m0s     27     4.2MB    9.7MB     10411    174   3756000    86     0   454
+#
+# FIN: ops=10411 rows=3756000 sqlErrs=86 connErrs=0 cancels=454
+# error x86: cancelled: op_fetch: firebird: Too many concurrent executions of the same request (GDS 335544663)
+# goroutines: baseline=3 final=1 (tras Close+GC)
+# heapAlloc:  baseline=0.5MB final=0.4MB (tras GC)
+# VEREDICTO: OK (con errores SQL inesperados: revisar)

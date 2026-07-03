@@ -111,6 +111,21 @@ func (e *StatusError) GDSCode() int32 {
 	return 0
 }
 
+// SQLState returns the SQLSTATE of the primary error entry, or "" when it
+// cannot be determined. Firebird does not send SQLSTATE in the wire status
+// vector: like fbclient/jaybird, it is derived client-side from the GDS code
+// (tabla generada en internal/errmsg). Si el vector trae isc_arg_sql_state
+// (poco común), ese valor tiene prioridad.
+func (e *StatusError) SQLState() string {
+	if !e.SV.HasError() {
+		return ""
+	}
+	if st := e.SV.Errors[0].SQLState; st != "" {
+		return st
+	}
+	return errmsg.SQLState(e.SV.Errors[0].Code)
+}
+
 // readStatusVector reads and parses a status vector from the wire.
 // Format: sequence of [tag Int32][value ...] terminated by isc_arg_end (0).
 //

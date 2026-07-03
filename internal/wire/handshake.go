@@ -314,18 +314,12 @@ func ConnectContext(ctx context.Context, cfg *ProtocolConfig) (*WireConnection, 
 		return nil, fmt.Errorf("op_crypt: wire_crypt=required but the negotiated auth produced no session key (server may not support wire encryption)")
 	}
 	if cfg.WireCrypt != WireCryptDisabled && len(sessionKey) > 0 {
-		if os.Getenv("FBDEBUG_CRYPT") != "" {
-			fmt.Fprintln(os.Stderr, fmt.Sprintf("FBDEBUG serverKeys (%d bytes): %x", len(serverKeys), serverKeys))
-		}
 		cipherName, readCipher, writeCipher, err := selectCipher(serverKeys, sessionKey)
 		if err != nil && cfg.WireCrypt == WireCryptRequired {
 			conn.Close()
 			return nil, fmt.Errorf("op_crypt: %w", err)
 		}
 		if err == nil {
-			if os.Getenv("FBDEBUG_CRYPT") != "" {
-				fmt.Fprintln(os.Stderr, "FBDEBUG negotiated cipher: "+cipherName)
-			}
 			// Send op_crypt in plaintext
 			w.WriteInt32(opCrypt)
 			w.WriteString(cipherName)

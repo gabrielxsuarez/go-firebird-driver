@@ -125,6 +125,35 @@ Main parameters:
 
 See [COMPATIBILITY.md](COMPATIBILITY.md) for the current compatibility contract, type behavior, charset behavior, and known limitations.
 
+## Usage Notes
+
+The four things most likely to surprise you:
+
+- **NUMERIC/DECIMAL scan as `string`** (lossless — no float rounding). Scan into a
+  `string` and parse with your decimal library; third-party decimal types that implement
+  `driver.Valuer` work directly as parameters.
+
+  ```go
+  var price string
+  err := db.QueryRow("SELECT price FROM products WHERE id = ?", 1).Scan(&price) // "1234.50"
+  ```
+
+- **BLOBs are fully materialized**: `[]byte` for binary, `string` for `SUB_TYPE TEXT`.
+  A 100 MB blob means 100 MB of memory; there is no streaming API in 1.0.
+- **`TIMESTAMP`/`TIME WITH TIME ZONE`** come back as `time.Time` preserving wall clock
+  and offset; the original IANA zone *name* is not guaranteed to survive.
+- **`CHARACTER SET NONE`** is passthrough bytes: strings you write as UTF-8 read back
+  fine, but arbitrary legacy bytes should be scanned as `[]byte`.
+- **No `LastInsertId`**: Firebird has no such concept; use `INSERT ... RETURNING`:
+
+  ```go
+  var id int64
+  err := db.QueryRow("INSERT INTO t (name) VALUES (?) RETURNING id", "x").Scan(&id)
+  ```
+
+- **Errors are `*firebird.Error`**: `errors.As` gives you `GDSCode()` and `SQLState()`
+  for programmatic handling.
+
 ## Validation
 
 The repository includes a PowerShell validation script for the normal stability workflow:

@@ -32,7 +32,7 @@ Verificada leyendo/ejercitando el código de ambos (no de memoria). ✅ = soport
 | `ColumnType{DatabaseTypeName,Length,Nullable,PrecisionScale,ScanType}` | ✅ | ✅ |
 | `SessionResetter` / `Validator` (higiene de pool) | ✅ | ❌ |
 | `NamedValueChecker` (validación de params en cliente) | ✅ | ❌ |
-| Cancelación por contexto con `op_cancel` real | ✅ (conexión reutilizable tras cancelar) | ✅ (la conexión se descarta) |
+| Cancelación por contexto con `op_cancel` real | ✅ asíncrona: interrumpe una op bloqueada en el server (~300ms en la sonda) y la conexión queda reutilizable | ⚠️ se dispara entre operaciones: una op bloqueada corre hasta terminar (19.2s para un deadline de 300ms en la misma sonda, v0.9.19) |
 | Cancelación acotada de lock-wait | ✅ (deadline forzado + grace) | ❌ |
 | Errores programáticos (código GDS + SQLSTATE) | ✅ `firebird.Error` | ✅ `FbError` |
 | Error a mitad de fetch: filas previas + error con GDS | ✅ | ⚠️ (pierde las filas del lote y el código) |

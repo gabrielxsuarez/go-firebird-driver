@@ -1,6 +1,7 @@
 package firebird
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -45,7 +46,13 @@ func ParseDSN(dsn string) (*Config, error) {
 
 	u, err := url.Parse(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("firebird: invalid DSN: %w", err)
+		// No propagar el error de url.Parse envuelto: incluye la URL completa
+		// y con eso la contraseña. Se conserva solo la causa subyacente.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			return nil, fmt.Errorf("firebird: invalid DSN: %w", ue.Err)
+		}
+		return nil, fmt.Errorf("firebird: invalid DSN")
 	}
 
 	if u.User != nil {

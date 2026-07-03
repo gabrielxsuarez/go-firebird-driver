@@ -57,6 +57,10 @@ const gdsMask = 0x14000000
 // strings de sqlclass/subclass) dejando el ÚLTIMO string como texto del mensaje.
 var entryRe = regexp.MustCompile(`^FB_IMPL_MSG(?:_NO_SYMBOL|_SYMBOL)?\(\s*(\w+),\s*(\d+)\s*,(?:.*,)?\s*"((?:[^"\\]|\\.)*)"\s*\)\s*$`)
 
+// FB_IMPL_MSG(FACILITY, num, symbol, sqlcode, "cl", "sub", "text"): solo la
+// forma completa trae SQLSTATE (clase "cl" + subclase "sub").
+var stateRe = regexp.MustCompile(`^FB_IMPL_MSG\(\s*(\w+),\s*(\d+),\s*\w+,\s*-?\d+,\s*"(\w{2})",\s*"(\w{3})",`)
+
 func main() {
 	ref := flag.String("ref", "master", "Firebird git ref to download headers from")
 	dir := flag.String("dir", "", "local directory with the .h files (skips download)")
@@ -64,8 +68,9 @@ func main() {
 	flag.Parse()
 
 	type msg struct {
-		code int32
-		text string
+		code  int32
+		text  string
+		state string
 	}
 	var msgs []msg
 
@@ -95,8 +100,12 @@ func main() {
 			if text == "" {
 				continue
 			}
+			state := ""
+			if sm := stateRe.FindStringSubmatch(line); sm != nil {
+				state = sm[3] + sm[4]
+			}
 			code := int32(gdsMask | fac.code<<16 | num)
-			msgs = append(msgs, msg{code, text})
+			msgs = append(msgs, msg{code, text, state})
 		}
 	}
 
@@ -127,7 +136,26 @@ func Template(code int32) string {
 	b.WriteString(`	}
 	return ""
 }
+
+// SQLState returns the SQLSTATE that Firebird associates with a GDS error
+// code, or "" when unknown. The server does not send SQLSTATE in the wire
+// status vector; like fbclient/jaybird, clients derive it from this table.
+func SQLState(code int32) string {
+	switch code {
 `)
+	states := 0
+	for _, m := range msgs {
+		if m.state == "" {
+			continue
+		}
+		states++
+		fmt.Fprintf(&b, "\tcase %d:\n\t\treturn %s\n", m.code, strconv.Quote(m.state))
+	}
+	b.WriteString(`	}
+	return ""
+}
+`)
+	fmt.Printf("%d sqlstates\n", states)
 	if err := os.WriteFile(*out, []byte(b.String()), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

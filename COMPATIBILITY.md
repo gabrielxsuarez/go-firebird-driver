@@ -60,7 +60,8 @@ Known limitation:
 ## Errors
 
 - Server errors are `*firebird.Error` (inspect with `errors.As`); `GDSCode()` returns the
-  primary GDS code and the full status vector is available in `SV`.
+  primary GDS code, `SQLState()` the 5-char SQLSTATE (empty if the server did not send
+  one), and the full status vector is available in `SV`. These three are stable 1.0 API.
 - Error strings render the complete GDS chain with the embedded Firebird message templates
   (e.g. `unsuccessful metadata update; DROP TABLE X failed; ... (GDS 335544351)`).
   The template table lives in `internal/errmsg` (generated from the Firebird source tree,
@@ -85,7 +86,7 @@ Known limitation:
 | Firebird type | Go scan behavior |
 | --- | --- |
 | Integer types | Native integer or scaled string for scaled numeric paths depending on descriptor. |
-| `NUMERIC`/`DECIMAL` | Scaled values are returned as strings when needed to preserve precision. |
+| `NUMERIC`/`DECIMAL` | Scaled values are returned as strings when needed to preserve precision. As parameters they accept `string`, integer/float types, and any third-party decimal implementing `driver.Valuer` (resolved by `database/sql` before reaching the driver). |
 | `INT128` | Returned as string. |
 | `DECFLOAT(16)` / `DECFLOAT(34)` | Returned as string, including `Infinity`, `-Infinity`, and `NaN`. Parameters are sent as UTF-8 text and converted by Firebird. |
 | `DATE`, `TIME`, `TIMESTAMP` | Returned as `time.Time`. |
@@ -104,7 +105,7 @@ Known limitation:
 Before tagging a release candidate:
 
 ```powershell
-$env:FB3_TEST_DSN='firebird://sysdba:masterkey@127.0.0.1:3050/C:/AlfaBeta/firebird/tmp/go_firebird_driver_test.fdb'
+$env:FB3_TEST_DSN='firebird://sysdba:masterkey@127.0.0.1:3050/path/to/test-database.fdb'
 .\scripts\validate.ps1 -Mode quick
 .\scripts\validate.ps1 -Mode race
 .\scripts\validate.ps1 -Mode fuzz -FuzzSeconds 30
@@ -113,11 +114,16 @@ $env:FB3_TEST_DSN='firebird://sysdba:masterkey@127.0.0.1:3050/C:/AlfaBeta/firebi
 
 With Firebird 4/5 containers available, the normal test suite also validates the FB4/FB5 type and metadata coverage.
 
-## Pending Product Decisions
+## Resolved Contract Decisions (2026-07-03, pre-1.0 review)
 
-These do not block production soak testing, but should be resolved before a strict `v1.0.0`:
+These are the 1.0 contract; all four leave room for additive 1.x extensions:
 
-- Whether streaming BLOB support is required for the first stable public contract.
-- Whether high-precision numeric values should remain `string` only, or gain optional helper types.
-- Whether exact IANA timezone name preservation is required, beyond preserving wall clock and offset.
-- Whether to add a stable non-`database/sql` API for Firebird-specific features.
+- **BLOBs are fully materialized** (`[]byte`/`string`). Memory cost validated up to
+  hundreds of MB in phase-2 testing. A streaming API can be added in 1.x without breaking
+  this contract.
+- **High-precision numerics are `string`** (lossless). Third-party decimal types work as
+  parameters today via `driver.Valuer`. Optional helper types may come in 1.x.
+- **Time zone values preserve wall clock and offset**; the original IANA zone name is not
+  guaranteed to survive every Firebird binary path. Documented limitation, not a bug.
+- **No non-`database/sql` API in 1.0** (no events, services, or protocol access). The wire
+  implementation is `internal/`; exposing a curated low-level API later is additive.

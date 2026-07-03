@@ -3,6 +3,7 @@ package wire
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha1"
 	"encoding/hex"
 	"math/big"
 	"strings"
@@ -411,4 +412,53 @@ func TestBuildServerAuthDataRoundTrip(t *testing.T) {
 	if serverPub.Cmp(parsedPub) != 0 {
 		t.Fatal("server public key round-trip failed")
 	}
+}
+
+// Simulación del lado servidor de SRP: solo la usan los tests para verificar
+// el protocolo offline (el driver real nunca computa el lado servidor).
+
+// serverPublicKey computes B = (k*v + g^b) mod N, where v is the stored verifier.
+func serverPublicKey(verifier, serverPrivate *big.Int) *big.Int {
+	// gb = g^b mod N
+	gb := new(big.Int).Exp(bignum.G, serverPrivate, bignum.N)
+	// SRP formula: kv = (k * v) % N
+	kv := new(big.Int).Mul(bignum.K, verifier)
+	kv.Mod(kv, bignum.N)
+	// SRP formula: B = (kv + gb) % N
+	B := new(big.Int).Add(kv, gb)
+	B.Mod(B, bignum.N)
+	return B
+}
+
+// serverSessionKey computes the server-side session key for verification.
+// K = SHA1((A * v^u)^b mod N)
+func serverSessionKey(user, password string, salt []byte, keyA, keyB, serverPrivate *big.Int) []byte {
+	u := scramble(keyA, keyB)
+	v := verifier(user, password, salt)
+	// vu = v^u mod N
+	vu := new(big.Int).Exp(v, u, bignum.N)
+	// SRP formula: avu = (A * vu) % N
+	avu := new(big.Int).Mul(keyA, vu)
+	avu.Mod(avu, bignum.N)
+	// S = avu^b mod N
+	sessionSecret := new(big.Int).Exp(avu, serverPrivate, bignum.N)
+	// K = SHA1(S)
+	h := sha1.New()
+	h.Write(sessionSecret.Bytes())
+	return h.Sum(nil)
+}
+
+// buildServerAuthData constructs the server auth challenge response:
+//
+//	[saltLen LE16][salt][keyLen LE16][B as hex string]
+func buildServerAuthData(salt []byte, serverPublic *big.Int) []byte {
+	hexB := toUpperHex(bignum.BigToBytes(serverPublic))
+	data := make([]byte, 0, 2+len(salt)+2+len(hexB))
+	// Salt length (LE16)
+	data = append(data, byte(len(salt)), byte(len(salt)>>8))
+	data = append(data, salt...)
+	// Key length (LE16)
+	data = append(data, byte(len(hexB)), byte(len(hexB)>>8))
+	data = append(data, []byte(hexB)...)
+	return data
 }

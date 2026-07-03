@@ -44,9 +44,11 @@ Parámetros propios que nakagami no tiene: `fetch_size` (default 200),
    ignoraba el `-1`, ahora va a ver el error — usá `RETURNING`, que funciona en ambos.
 3. **Errores**: son `*firebird.Error` — `errors.As` + `GDSCode()`/`SQLState()` para manejo
    programático. El texto incluye la cadena completa de mensajes de Firebird.
-4. **Cancelación por contexto**: ambos cancelan en el servidor (`op_cancel`); acá la
-   conexión queda **reutilizable** tras cancelar una query en ejecución (no se descarta
-   del pool), y una cancelación durante un lock-wait está acotada en el tiempo.
+4. **Cancelación por contexto**: acá `op_cancel` se envía asíncrono e **interrumpe la
+   operación en el servidor** (una query pesada se corta en cuanto vence el contexto), la
+   conexión queda reutilizable, y una cancelación durante un lock-wait está acotada en el
+   tiempo. En nakagami v0.9.19 la cancelación se aplica entre operaciones: una query
+   bloqueada en el servidor corre hasta terminar aunque el contexto haya vencido.
 5. **Error a mitad de fetch**: acá recibís las filas ya leídas y después el error real con
    su código GDS en `rows.Err()`; nakagami puede perder las filas del lote fallido.
 6. **Fuera de alcance 1.0** (si los usás, quedate con nakagami para esas partes): events

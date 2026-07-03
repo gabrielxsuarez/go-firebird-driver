@@ -1,0 +1,17 @@
+# soak go-firebird-driver
+# inicio=2026-07-03T15:38:33-03:00 duracion=45s workers=16 maxconns=8
+# dsn=firebird://***@localhost:3063//var/lib/firebird/data/driver.fdb?charset=UTF8
+# go=go1.26.4 GOMAXPROCS=8
+# setup OK (soak_rows=2000 filas, soak_blob=64KB)
+# baseline: goroutines=3 heapAlloc=0.5MB
+#
+# elapsed goroutines heapAlloc heapSys ops ops/s rowsRead sqlErrs connErrs cancels
+    10s     28     3.9MB    9.7MB      1802    180    620000     0     0     0
+    20s     27     2.7MB    9.8MB      3554    175   1226000     0     0     0
+    30s     27     4.0MB    9.7MB      5349    180   1850000     0     0     0
+    40s     28     2.9MB    9.8MB      7126    178   2460000     0     0     0
+#
+# FIN: ops=8002 rows=2748000 sqlErrs=0 connErrs=0 cancels=0
+# goroutines: baseline=3 final=1 (tras Close+GC)
+# heapAlloc:  baseline=0.5MB final=0.4MB (tras GC)
+# VEREDICTO: OK

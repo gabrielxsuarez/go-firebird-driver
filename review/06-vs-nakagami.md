@@ -51,8 +51,14 @@ contra la última release de nakagami.
 | int → TIMESTAMP param | error del driver (cliente) | error -303 (server) |
 | **Error a mitad de fetch (div/0 en fila 300)** | **200 filas entregadas + error con GDS 335544…** | **0 filas + error sin código GDS** |
 | Conexión tras error de fetch | reutilizable | reutilizable |
-| Cancel por contexto (query pesada) | cancela <100ms | cancela ~100ms |
+| **Cancel por contexto (query pesada bloqueada en el server)** | **cancela en ~300ms (op_cancel asíncrono interrumpe la ejecución)** | **19.2s para un deadline de 300ms: su op_cancel se dispara entre operaciones; una op bloqueada corre hasta terminar** |
 | Conexión tras cancel | reutilizable | reutilizable |
+
+Nota sobre la fila de cancelación: la primera versión de la sonda usaba un CTE recursivo de
+500k niveles que **falla por sí solo** contra el límite de clones de recursión de Firebird
+(GDS 335544663 a los ~50ms) — eso simulaba una "cancelación rápida" en ambos drivers. Con
+una query pesada legítima (cross join) la diferencia real quedó expuesta. El master de
+nakagami (post v0.9.19, #278) tiene trabajo en curso sobre cancelación.
 | TIMESTAMP zona no-UTC | pared preservada | idéntico |
 | UTF8 ñ/€ | OK | OK |
 | **LastInsertId** | **error explícito** | **-1 sin error** |

@@ -198,6 +198,11 @@ func TestPublicErrorType(t *testing.T) {
 	if fbErr.GDSCode() == 0 {
 		t.Error("GDSCode() == 0")
 	}
+	// FB3+ (protocolo 13+) manda SQLSTATE; para un error de sintaxis es 42xxx.
+	// Es API pública prometida en COMPARISON/MIGRATION.
+	if st := fbErr.SQLState(); len(st) != 5 || !strings.HasPrefix(st, "42") {
+		t.Errorf("SQLState() = %q, esperaba clase 42xxx", st)
+	}
 	var wireErr *wire.StatusError
 	if !errors.As(err, &wireErr) {
 		t.Error("el alias debe seguir matcheando *wire.StatusError")

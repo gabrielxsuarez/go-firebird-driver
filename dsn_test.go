@@ -1,6 +1,7 @@
 package firebird
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/gabrielxsuarez/go-firebird-driver/internal/wire"
@@ -152,5 +153,17 @@ func TestParseDSNPreservesUnknownCharset(t *testing.T) {
 	}
 	if cfg.Charset != "CUSTOM_CHARSET" {
 		t.Fatalf("Charset = %q, want CUSTOM_CHARSET", cfg.Charset)
+	}
+}
+
+// Seguridad: un DSN inválido no debe filtrar la contraseña en el mensaje de
+// error (url.Parse incluye la URL completa en su url.Error).
+func TestParseDSNInvalidDoesNotLeakPassword(t *testing.T) {
+	_, err := ParseDSN("firebird://user:secretpass@localhost/db\x7f?bad=%zz")
+	if err == nil {
+		t.Fatal("esperaba error")
+	}
+	if strings.Contains(err.Error(), "secretpass") {
+		t.Fatalf("el error filtra la contraseña: %v", err)
 	}
 }
