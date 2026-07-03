@@ -1,4 +1,9 @@
-// Code generated from docs/firebirdsql/timezonemap.go; DO NOT EDIT.
+// Code generated from the Firebird named-timezone ID table; DO NOT EDIT.
+//
+// Fuente: mapa oficial de IDs de zona horaria de Firebird 4+ (los mismos datos
+// que publica https://github.com/nakagami/firebirdsql/blob/master/timezonemap.go).
+// Es una tabla estatica: solo cambia si Firebird agrega zonas nuevas; en ese caso
+// regenerar las constantes namedZone* a partir de esa fuente.
 package timezone
 
 const (

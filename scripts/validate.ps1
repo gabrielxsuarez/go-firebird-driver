@@ -36,7 +36,7 @@ if (-not $hasIntegration) {
 
 function Invoke-Unit {
     Invoke-Step "Unit and wire tests" {
-        go test ./internal/... ./internal/wire/...
+        go test ./internal/...
     }
     Invoke-Step "DSN and local driver contract tests" {
         go test -run "TestParseDSN|TestHandle|TestWithCancel|TestBuildConnectDPB" .
@@ -55,7 +55,7 @@ function Invoke-Integration {
 function Invoke-Race {
     if (-not $hasIntegration) {
         Invoke-Step "Race tests without integration DSN" {
-            go test -race ./internal/... ./internal/wire/...
+            go test -race ./internal/...
         }
         return
     }

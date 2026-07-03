@@ -4,7 +4,7 @@ This checklist is intended for the production soak period before a future `v1.0.
 
 ## Per Change
 
-- `go test ./internal/... ./internal/wire/...`
+- `go test ./internal/...`
 - `go test -run "TestParseDSN|TestHandle|TestWithCancel|TestBuildConnectDPB" .`
 - Integration test against Firebird 3 when `FB3_TEST_DSN` is available:
   - `go test -count=1 ./...`

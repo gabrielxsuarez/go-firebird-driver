@@ -55,26 +55,25 @@ The focus is on implementing the `database/sql` contract well, not on covering a
 
 ## Why Use It Instead of `nakagami/firebirdsql`
 
-In the most recent benchmarks in this repository, `go-firebird-driver` was consistently more efficient in time, memory, and allocations.
+In the head-to-head benchmarks in this repository (`bench/compare/`, same server, same data,
+`benchstat` n=6), `go-firebird-driver` was faster in 6 of 7 scenarios and allocated less
+memory in all 7:
 
-| Operation | go-firebird-driver | nakagami/firebirdsql | Improvement |
-|-----------|-------------------:|---------------------:|------------:|
-| Ping | **587,114 ns/op** · **0 allocs** | 93,254,153 ns/op · 69 allocs | **158.8x faster** |
-| Single-row query | **51,630,597 ns/op** · **8 allocs** | 98,583,298 ns/op · 91 allocs | **1.9x faster** |
-| Ad-hoc insert | **5,844,778 ns/op** · **5 allocs** | 122,372,619 ns/op · 110 allocs | **20.9x faster** |
-| Prepared insert | **717,707 ns/op** · **7 allocs** | 1,476,732 ns/op · 55 allocs | **2.1x faster** |
-| 1000-row query | **69,000,338 ns/op** · **7,628 allocs** | 110,013,506 ns/op · 20,738 allocs | **1.6x faster** |
-
-Notable reductions versus `nakagami/firebirdsql`:
-
-- **100% fewer allocations** in `Ping`
-- **91.2% fewer allocations** in single-row queries
-- **95.5% fewer allocations** in ad-hoc inserts
-- **63.2% fewer allocations** even in 1000-row queries
+| Scenario | go-firebird-driver | nakagami/firebirdsql | Time | Allocations |
+|----------|-------------------:|---------------------:|-----:|------------:|
+| Connect (SRP + attach + detach) | 62.8 ms · 211 allocs | 66.8 ms · 3,118 allocs | **1.06x** | **14.8x fewer** |
+| Prepared `SELECT 1` | 241 µs · 12 allocs | 802 µs · 104 allocs | **3.3x faster** | **8.7x fewer** |
+| Fetch 10k rows × 10 columns | 108.8 ms · 130k allocs | 133.9 ms · 480k allocs | **1.2x faster** | **3.7x fewer** |
+| Prepared INSERT (batched tx) | 226 µs · 8 allocs | 359 µs · 105 allocs | **1.6x faster** | **13x fewer** |
+| 1 KB BLOB read | 573 µs · 17 allocs | 1,300 µs · 198 allocs | **2.3x faster** | **11.6x fewer** |
+| 1 MB BLOB read | 24.8 ms · 36 allocs | 119.9 ms · 15,603 allocs | **4.8x faster** | **433x fewer** |
+| Pool, 20 concurrent goroutines | 83.0 µs · 11 allocs | 81.7 µs · 106 allocs | tie (server-bound) | **9.6x fewer** |
 
 That matters because a database driver runs in the hot path of the application: fewer allocations mean less GC pressure, lower latency, and better stability under load.
 
-> Data taken from the repository's comparison profiles, measured on April 2, 2026, on Windows/amd64 with Go 1.26.0. Exact results will vary depending on network, server, dataset, and workload.
+> Measured 2026-07-03 against Firebird 3.0.14 on loopback (Windows/amd64, Go 1.26).
+> Fully reproducible: see [bench/compare/README.md](bench/compare/README.md).
+> Exact results will vary depending on network, server, dataset, and workload.
 
 ## Project Scope
 
@@ -127,7 +126,7 @@ See [COMPATIBILITY.md](COMPATIBILITY.md) for the current compatibility contract,
 The repository includes a PowerShell validation script for the normal stability workflow:
 
 ```powershell
-$env:FB3_TEST_DSN='firebird://sysdba:masterkey@127.0.0.1:3050/C:/AlfaBeta/firebird/tmp/go_firebird_driver_test.fdb'
+$env:FB3_TEST_DSN='firebird://sysdba:masterkey@127.0.0.1:3050/path/to/test-database.fdb'
 .\scripts\validate.ps1 -Mode quick
 .\scripts\validate.ps1 -Mode race
 .\scripts\validate.ps1 -Mode fuzz -FuzzSeconds 30
