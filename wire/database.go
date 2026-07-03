@@ -53,6 +53,14 @@ func (wc *WireConnection) SetDeadline(t time.Time) {
 	_ = wc.conn.SetDeadline(t)
 }
 
+// SetReadDeadline sets the read deadline on the underlying connection. Setting
+// a past time forces a blocked read to return, used to honor a cancelled
+// context when the server can't interrupt the current operation (e.g. a lock
+// wait). The connection must be treated as broken afterwards.
+func (wc *WireConnection) SetReadDeadline(t time.Time) {
+	_ = wc.conn.SetReadDeadline(t)
+}
+
 // CloseTransport closes the underlying socket without attempting protocol
 // cleanup. Use this after transport failures, where detach would only add more
 // broken writes to the same dead connection.

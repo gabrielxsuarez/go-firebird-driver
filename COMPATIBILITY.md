@@ -66,6 +66,15 @@ Known limitation:
   The template table lives in `internal/errmsg` (generated from the Firebird source tree,
   message texts under IDPL; regenerate with `go generate ./internal/errmsg`).
 
+## Context cancellation
+
+- Cancelling the context of a query/exec sends `op_cancel` to the server, which
+  interrupts execution and fetches cleanly and leaves the connection reusable.
+- A row **lock wait** (transactions use WAIT mode) is not interruptible by
+  `op_cancel`. When a cancelled context can't be honored that way within a short
+  grace period, the driver forces the blocked read to return and discards the
+  connection, so a cancelled context is always bounded and never hangs forever.
+
 ## Wire encryption
 
 - `wire_crypt=enabled` (default) negotiates ChaCha20 against Firebird 4/5 and Arc4 against

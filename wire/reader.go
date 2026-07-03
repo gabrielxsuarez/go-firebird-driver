@@ -1,8 +1,17 @@
 package wire
 
-import "io"
+import (
+	"fmt"
+	"io"
+)
 
 const defaultReadBufSize = 16 * 1024
+
+// maxWireBufferLen acota la longitud de un buffer del protocolo tomada del
+// stream. Los buffers legítimos (segmentos de blob, respuestas info, filas)
+// están muy por debajo de esto; el límite evita que un length prefix
+// corrupto o malicioso dispare una asignación de gigabytes (DoS/OOM).
+const maxWireBufferLen = 64 * 1024 * 1024
 
 // Reader reads XDR-encoded data from an underlying io.Reader.
 // It keeps a sliding window over an internal buffer so small reads can be
@@ -190,6 +199,10 @@ func (r *Reader) ReadBuffer() []byte {
 		ulen &= 0xFFFF
 	}
 	length := int(ulen)
+	if length < 0 || length > maxWireBufferLen {
+		r.err = fmt.Errorf("wire: buffer length %d exceeds maximum %d", length, maxWireBufferLen)
+		return nil
+	}
 	pad := (4 - length) & 3
 	data := r.readView(length + pad)
 	if r.err != nil {

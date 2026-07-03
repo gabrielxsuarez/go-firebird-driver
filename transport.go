@@ -46,5 +46,7 @@ func wrapBadConn(err error) error {
 	if err == nil || errors.Is(err, driver.ErrBadConn) {
 		return err
 	}
-	return fmt.Errorf("%w: %v", driver.ErrBadConn, err)
+	// Doble %w: errors.Is(err, driver.ErrBadConn) permite al pool reintentar,
+	// y errors.As sobre la causa original sigue funcionando.
+	return fmt.Errorf("%w: %w", driver.ErrBadConn, err)
 }

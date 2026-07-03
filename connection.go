@@ -1,6 +1,7 @@
 package firebird
 
 import (
+	"bytes"
 	"context"
 	"database/sql/driver"
 	"errors"
@@ -74,6 +75,7 @@ const (
 
 type descCacheEntry struct {
 	query    string
+	info     []byte // copia del describe crudo: valida que la metadata no cambio (DDL)
 	stmtType int32
 	outputs  []wire.ColumnDescriptor
 	inputs   []wire.ColumnDescriptor
@@ -88,17 +90,23 @@ func descCacheIndex(query string) uint32 {
 	return h & descCacheMask
 }
 
-func (c *conn) descCacheLookup(query string) (int32, []wire.ColumnDescriptor, []wire.ColumnDescriptor, bool) {
+// descCacheLookup returns cached descriptors only when the raw describe bytes
+// match the cached ones: after a DDL by another connection the descriptors can
+// change and reusing stale ones would build a BLR that disagrees with the
+// server. The prepare response already carries the bytes, so this check is a
+// memcmp, not extra I/O.
+func (c *conn) descCacheLookup(query string, info []byte) (int32, []wire.ColumnDescriptor, []wire.ColumnDescriptor, bool) {
 	e := &c.descCache[descCacheIndex(query)]
-	if e.query == query {
+	if e.query == query && bytes.Equal(e.info, info) {
 		return e.stmtType, e.outputs, e.inputs, true
 	}
 	return 0, nil, nil, false
 }
 
-func (c *conn) descCacheStore(query string, stmtType int32, outputs, inputs []wire.ColumnDescriptor) {
+func (c *conn) descCacheStore(query string, info []byte, stmtType int32, outputs, inputs []wire.ColumnDescriptor) {
 	c.descCache[descCacheIndex(query)] = descCacheEntry{
 		query:    query,
+		info:     append([]byte(nil), info...), // el buffer de la respuesta se reusa
 		stmtType: stmtType,
 		outputs:  outputs,
 		inputs:   inputs,
@@ -172,6 +180,9 @@ func (c *conn) PrepareContext(ctx context.Context, query string) (driver.Stmt, e
 
 	if c.closed || c.bad {
 		return nil, driver.ErrBadConn
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	stop := c.withCancel(ctx)
@@ -270,17 +281,28 @@ func (c *conn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, e
 	if c.closed || c.bad {
 		return nil, driver.ErrBadConn
 	}
-
-	// Commit any pending auto-commit transaction before starting explicit one
-	if c.autoTx != 0 {
-		_ = c.wc.Commit(c.autoTx)
-		c.autoTx = 0
-		c.dirtyAutoTx = false
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
+	// Validar opts antes de tocar el wire: un nivel no soportado no debe
+	// commitear el autoTx pendiente como efecto colateral.
 	tpb, err := buildTPB(opts)
 	if err != nil {
 		return nil, err
+	}
+
+	stop := c.withCancel(ctx)
+	defer stop()
+
+	// Commit any pending auto-commit transaction before starting explicit one
+	if c.autoTx != 0 {
+		cerr := c.wc.Commit(c.autoTx)
+		c.autoTx = 0
+		c.dirtyAutoTx = false
+		if cerr != nil {
+			return nil, c.handleFatalErrorLocked(cerr)
+		}
 	}
 
 	txHandle, err := c.wc.Transaction(tpb)
@@ -303,6 +325,9 @@ func (c *conn) ExecContext(ctx context.Context, query string, args []driver.Name
 
 	if c.closed || c.bad {
 		return nil, driver.ErrBadConn
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	stop := c.withCancel(ctx)
@@ -370,15 +395,15 @@ func (c *conn) ExecContext(ctx context.Context, query string, args []driver.Name
 			return nil, c.handleFatalErrorLocked(err)
 		}
 
-		rowsAffected := getRowsAffected(c.wc, stmtHandle, stmtType)
+		rowsAffected, raErr := getRowsAffected(c.wc, stmtHandle, stmtType)
+		if raErr != nil {
+			raErr = c.handleFatalErrorLocked(raErr)
+		}
 		_ = c.wc.RecycleStatement(stmtHandle, false)
 
 		return &result{
-			wc:         c.wc,
-			stmtHandle: stmtHandle,
-			stmtType:   stmtType,
-			cached:     rowsAffected,
-			computed:   true,
+			rowsAffected: rowsAffected,
+			err:          raErr,
 		}, nil
 	}
 
@@ -405,15 +430,15 @@ func (c *conn) ExecContext(ctx context.Context, query string, args []driver.Name
 		}
 	}
 
-	rowsAffected := getRowsAffected(c.wc, stmtHandle, stmtType)
+	rowsAffected, raErr := getRowsAffected(c.wc, stmtHandle, stmtType)
+	if raErr != nil {
+		raErr = c.handleFatalErrorLocked(raErr)
+	}
 	_ = c.wc.RecycleStatement(stmtHandle, false)
 
 	return &result{
-		wc:         c.wc,
-		stmtHandle: stmtHandle,
-		stmtType:   stmtType,
-		cached:     rowsAffected,
-		computed:   true,
+		rowsAffected: rowsAffected,
+		err:          raErr,
 	}, nil
 }
 
@@ -424,6 +449,9 @@ func (c *conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 
 	if c.closed || c.bad {
 		return nil, driver.ErrBadConn
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	stop := c.withCancel(ctx)
@@ -450,14 +478,14 @@ func (c *conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 	}
 
 	// Use cached descriptors if available, otherwise parse and cache
-	stmtType, outputs, inputs, cached := c.descCacheLookup(query)
+	stmtType, outputs, inputs, cached := c.descCacheLookup(query, infoData)
 	if !cached {
 		stmtType, outputs, inputs, err = c.wc.CompleteSQLDescribe(stmtHandle, infoData, wire.PrepareInfoItems(), 65535)
 		if err != nil {
 			_ = c.wc.RecycleStatement(stmtHandle, false)
 			return nil, c.handleFatalErrorLocked(err)
 		}
-		c.descCacheStore(query, stmtType, outputs, inputs)
+		c.descCacheStore(query, infoData, stmtType, outputs, inputs)
 	}
 
 	if len(args) != len(inputs) {
@@ -554,7 +582,20 @@ func (c *conn) ResetSession(ctx context.Context) error {
 	if c.closed || c.bad {
 		return driver.ErrBadConn
 	}
-	return c.pingLocked(ctx)
+	// Una transaccion explicita viva aca significa que el ciclo Tx no se
+	// cerro (bug del driver o del pool): descartar la conexion antes que
+	// reusar estado desconocido.
+	if c.activeTx != 0 {
+		_ = c.wc.Rollback(c.activeTx)
+		c.activeTx = 0
+		c.markBadLocked()
+		return driver.ErrBadConn
+	}
+	// Sin I/O en el camino feliz: un ping por checkout costaba un round-trip
+	// extra por operacion del pool; las conexiones muertas se detectan en el
+	// primer uso, donde los caminos pre-escritura ya devuelven ErrBadConn
+	// reintentable.
+	return nil
 }
 
 // IsValid implements driver.Validator.
@@ -686,6 +727,16 @@ func (c *conn) markBadLocked() {
 // connection if ctx is done. Returns a stop function that must be called
 // when the operation completes. stop() blocks until the goroutine exits,
 // guaranteeing Cancel() won't fire after stop() returns.
+// cancelGracePeriod is how long we wait, after asking the server to cancel,
+// for the in-flight operation to return on its own. op_cancel cleanly
+// interrupts execution and fetches within milliseconds and keeps the
+// connection reusable; a lock wait in WAIT mode is not interruptible by
+// op_cancel, so past this grace period we force the blocked read to unblock
+// with a past read deadline, which makes the operation fail and the pool
+// discard the (now broken) connection. This bounds a cancelled context to a
+// finite wait instead of hanging forever on a contended row.
+const cancelGracePeriod = 2 * time.Second
+
 func (c *conn) withCancel(ctx context.Context) (stop func()) {
 	if ctx == nil || ctx.Done() == nil {
 		return func() {}
@@ -698,6 +749,13 @@ func (c *conn) withCancel(ctx context.Context) (stop func()) {
 		select {
 		case <-ctx.Done():
 			_ = c.wc.Cancel(wire.CancelRaise)
+			// Give op_cancel a chance to interrupt cleanly; if it can't
+			// (lock wait), force the read to return so the deadline is honored.
+			select {
+			case <-done:
+			case <-time.After(cancelGracePeriod):
+				c.wc.SetReadDeadline(time.Now())
+			}
 		case <-done:
 		}
 	}()
@@ -785,6 +843,8 @@ func buildTPB(opts driver.TxOptions) ([]byte, error) {
 		}
 		return tpbReadCommittedWrite, nil
 	case 4, 5: // LevelRepeatableRead, LevelSnapshot
+		// Firebird no tiene REPEATABLE READ; se mapea a SNAPSHOT, que es
+		// estrictamente mas fuerte (mismo criterio que jaybird).
 		if opts.ReadOnly {
 			return tpbSnapshotRead, nil
 		}
@@ -801,31 +861,28 @@ func buildTPB(opts driver.TxOptions) ([]byte, error) {
 	case 7: // LevelLinearizable
 		return nil, errLinearizable
 	default:
-		if opts.ReadOnly {
-			return tpbDefaultRead, nil
-		}
-		return tpbDefaultWrite, nil
+		return nil, fmt.Errorf("firebird: isolation level %d not supported", opts.Isolation)
 	}
 }
 
 var rowsAffectedInfoItems = []byte{wire.IscInfoSQLRecords}
 
-func getRowsAffected(wc *wire.WireConnection, stmtHandle int32, stmtType int32) int64 {
+func getRowsAffected(wc *wire.WireConnection, stmtHandle int32, stmtType int32) (int64, error) {
 	data, err := wc.InfoSQL(stmtHandle, rowsAffectedInfoItems, 256)
 	if err != nil {
-		return 0
+		return 0, err
 	}
 
 	_, insertCount, updateCount, deleteCount := wire.ParseRecordCounts(data)
 
 	switch stmtType {
 	case wire.StmtInsert:
-		return insertCount
+		return insertCount, nil
 	case wire.StmtUpdate:
-		return updateCount
+		return updateCount, nil
 	case wire.StmtDelete:
-		return deleteCount
+		return deleteCount, nil
 	default:
-		return insertCount + updateCount + deleteCount
+		return insertCount + updateCount + deleteCount, nil
 	}
 }

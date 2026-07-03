@@ -1299,30 +1299,22 @@ func scaledInt64(v int64, scale int32) string {
 	}
 
 	neg := v < 0
+	// Magnitud en uint64: -MinInt64 no existe en int64 (negarlo lo deja
+	// negativo y el string salia con doble signo); en complemento a dos
+	// la negacion uint64 da la magnitud correcta para todo el rango.
+	u := uint64(v)
 	if neg {
-		v = -v
+		u = -u
 	}
 
 	decPos := int(-scale)
 
-	// Fast path: v fits in uint64 and has <= 19 digits (max for int64)
-	if v >= 0 {
-		s := int64ToString(v)
-		if decPos >= len(s) {
-			// Need leading zeros: e.g., 5 with scale -3 → "0.005"
-			return addNeg("0."+repeatZeros(decPos-len(s))+s, neg)
-		}
-		return addNeg(s[:len(s)-decPos]+"."+s[len(s)-decPos:], neg)
-	}
-
-	// Slow path: use big.Int (should be rare for int64)
-	s := big.NewInt(v).String()
+	s := strconv.FormatUint(u, 10)
 	if decPos >= len(s) {
-		s = "0." + repeatZeros(decPos-len(s)) + s
-	} else {
-		s = s[:len(s)-decPos] + "." + s[len(s)-decPos:]
+		// Need leading zeros: e.g., 5 with scale -3 -> "0.005"
+		return addNeg("0."+repeatZeros(decPos-len(s))+s, neg)
 	}
-	return addNeg(s, neg)
+	return addNeg(s[:len(s)-decPos]+"."+s[len(s)-decPos:], neg)
 }
 
 // int64ToString converts int64 to string without allocation (for most cases).

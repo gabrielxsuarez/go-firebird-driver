@@ -82,6 +82,9 @@ func (s *stmt) ExecContext(ctx context.Context, args []driver.NamedValue) (drive
 	if s.closed || s.conn.closed || s.conn.bad {
 		return nil, driver.ErrBadConn
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	stop := s.conn.withCancel(ctx)
 	defer stop()
@@ -166,14 +169,14 @@ func (s *stmt) ExecContext(ctx context.Context, args []driver.NamedValue) (drive
 
 	// RowsAffected se calcula acá, bajo conn.mu: hacerlo lazy en result
 	// implicaría I/O de wire sobre una conexión que el pool pudo reasignar.
-	rowsAffected := getRowsAffected(s.conn.wc, s.handle, s.stmtType)
+	rowsAffected, raErr := getRowsAffected(s.conn.wc, s.handle, s.stmtType)
+	if raErr != nil {
+		raErr = s.conn.handleFatalErrorLocked(raErr)
+	}
 
 	return &result{
-		wc:         s.conn.wc,
-		stmtHandle: s.handle,
-		stmtType:   s.stmtType,
-		cached:     rowsAffected,
-		computed:   true,
+		rowsAffected: rowsAffected,
+		err:          raErr,
 	}, nil
 }
 
@@ -184,6 +187,9 @@ func (s *stmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driv
 
 	if s.closed || s.conn.closed || s.conn.bad {
 		return nil, driver.ErrBadConn
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	stop := s.conn.withCancel(ctx)

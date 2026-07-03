@@ -2,6 +2,7 @@ package firebird
 
 import (
 	"context"
+	"math"
 	"database/sql/driver"
 	"fmt"
 	"io"
@@ -315,6 +316,9 @@ func (r *rows) ColumnTypeDatabaseTypeName(index int) string {
 }
 
 // ColumnTypeLength implements driver.RowsColumnTypeLength.
+// For CHAR/VARCHAR the declared length is in CHARACTERS (the wire descriptor
+// reports bytes; a UTF8 CHAR(10) arrives as 40 bytes). BLOBs report variable
+// length like other database/sql drivers.
 func (r *rows) ColumnTypeLength(index int) (length int64, ok bool) {
 	if index < 0 || index >= len(r.outputs) {
 		return 0, false
@@ -323,11 +327,28 @@ func (r *rows) ColumnTypeLength(index int) (length int64, ok bool) {
 	sqlType := col.SQLType & ^int32(1) // strip nullable bit
 	switch sqlType {
 	case wire.SQLText, wire.SQLVarying:
-		return int64(col.Length), true
+		return int64(col.Length) / int64(charsetMaxBytesPerChar(col.SubType&0xFF)), true
 	case wire.SQLBlob:
-		return 0, false
+		return math.MaxInt64, true
 	default:
 		return 0, false
+	}
+}
+
+// charsetMaxBytesPerChar returns the maximum encoded size of one character
+// for a Firebird charset ID (RDB$CHARACTER_SETS.RDB$BYTES_PER_CHARACTER).
+func charsetMaxBytesPerChar(charsetID int32) int32 {
+	switch charsetID {
+	case 3: // UNICODE_FSS
+		return 3
+	case 4: // UTF8
+		return 4
+	case 5, 6, 44, 56, 57, 64: // SJIS_0208, EUCJ_0208, KSC_5601, BIG_5, GB_2312, GBK(64)
+		return 2
+	case 69: // GB18030
+		return 4
+	default: // NONE, OCTETS, ASCII, ISO8859_x, WIN125x, DOS...
+		return 1
 	}
 }
 
@@ -376,17 +397,17 @@ func (r *rows) ColumnTypeScanType(index int) reflect.Type {
 		return reflect.TypeOf("")
 	case wire.SQLShort:
 		if col.Scale < 0 {
-			return reflect.TypeOf(float64(0))
+			return reflect.TypeOf("") // NUMERIC escalado se entrega como string
 		}
 		return reflect.TypeOf(int16(0))
 	case wire.SQLLong:
 		if col.Scale < 0 {
-			return reflect.TypeOf(float64(0))
+			return reflect.TypeOf("")
 		}
 		return reflect.TypeOf(int32(0))
 	case wire.SQLInt64:
 		if col.Scale < 0 {
-			return reflect.TypeOf(float64(0))
+			return reflect.TypeOf("")
 		}
 		return reflect.TypeOf(int64(0))
 	case wire.SQLInt128, wire.SQLDec16, wire.SQLDec34:
