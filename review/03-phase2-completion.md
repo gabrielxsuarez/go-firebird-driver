@@ -61,6 +61,46 @@ más la matriz multi-versión (2.2) y el refuerzo de fuzzers (2.1).
 - Barrido de 37 bases reales: 663 tablas, 97.149 filas → 0 errores.
 - Comparación vs nakagami sobre las 37 bases reales: 0 discrepancias.
 
+## Análisis en curso al pausar (2026-07-03) — RESUELTO, no es bug del driver
+
+Al re-correr la comparación contra nakagami sobre las 37 bases reales, la herramienta
+`oracle` (scratchpad) se colgaba en 4 bases (estadisticas, mds, publicidadessoftware,
+winfarmaMarDelPlata) y era lenta en ~10 más. **No es una regresión del driver.**
+
+Diagnóstico (scratchpad `probe/pertable`): el reader del comparador usaba
+`SELECT FIRST 200 * FROM "tabla" ORDER BY rdb$db_key` para ordenar determinísticamente.
+Ese `ORDER BY rdb$db_key` fuerza al servidor a un sort completo de tablas de millones de
+filas (LOG_PRODUCTO, VISITA en estadisticas), que tarda >12s. Evidencia de que el driver
+está bien: con un timeout de contexto de 12s, **op_cancel canceló el sort limpiamente**
+devolviendo "operation was cancelled (GDS 335544794)" — exactamente el comportamiento correcto.
+
+El barrido normal (`sweep`, sin ORDER BY) lee las 37 bases en 7s sin problema, y la primera
+comparación (antes de esta pasada) ya había dado 0 diferencias. La corrección fue quitar el
+`ORDER BY rdb$db_key` del reader del comparador (el orden natural de scan es determinista para
+una base estática leída desde el mismo servidor); la re-comparación quedó corriendo al pausar.
+
+Resultado de la re-comparación (sin ORDER BY): **8 diferencias, todas en la misma columna de
+una base**, ver el hallazgo abierto de abajo.
+
+## HALLAZGO ABIERTO (retomar acá) — BLOB vacío devuelto como int64(0)
+
+**Bug real confirmado, sin corregir aún** (se pausó para documentar antes de arreglar).
+
+- Reproducción: `interacciones.fdb` (dialecto 1), tabla `INTERACCIONES`, columna `MANEJO`
+  (BLOB SUB_TYPE 1 TEXT, charset id 21). Nuestro driver devuelve `int64(0)`; nakagami devuelve
+  bytes vacíos. 8 filas afectadas → las 8 únicas diferencias contra nakagami en las 37 bases.
+- Causa raíz: `rows.go:206-209`. Cuando una columna BLOB tiene `blobID == 0` (blob vacío), la
+  materialización hace `continue` y deja en la fila el `int64(0)` interno (el blobID crudo),
+  filtrándolo al usuario. Los NULL reales ya se filtran antes (`row[ci] == nil` en la línea 203),
+  así que un blob no-nil con blobID 0 es un blob **vacío**.
+- Fix propuesto: en el branch `blobID == 0`, en vez de `continue`, asignar el valor vacío según
+  subtype — `row[ci] = ""` para SUB_TYPE 1 (texto) y `row[ci] = []byte{}` para binario — para no
+  filtrar nunca el int64 interno. Añadir test de regresión (crear tabla con BLOB, insertar valor
+  vacío vs NULL vs con datos, verificar los tres). Comprobar también el camino de `Execute2`/rows
+  iniciales por si comparten el patrón. Tras el fix, re-correr la comparación: debería dar 0.
+- Herramientas para retomar (scratchpad): `oracle/` (readers por build-tag `nak`, comparación
+  por líneas canónicas), `probe/pertable/` (diagnóstico tabla-por-tabla con timeout).
+
 ## Pendiente para fases posteriores (no Fase 2)
 
 - Fase 2.5: refactors (`wire/types.go` ~2000 líneas, `wire/database.go` ~1200).
