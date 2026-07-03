@@ -530,6 +530,13 @@ func (c *conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 		}
 		if msgs > 0 {
 			initialRows = [][]any{row}
+			if err := c.materializeBlobRowsLocked(txHandle, outputs, initialRows); err != nil {
+				if autoCommit {
+					c.invalidateAutoTx()
+				}
+				_ = c.wc.FreeStatement(stmtHandle, wire.DSQLDrop)
+				return nil, c.handleFatalErrorLocked(err)
+			}
 		}
 		eof = true
 		hasCursor = false

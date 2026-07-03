@@ -248,6 +248,14 @@ func (s *stmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driv
 		}
 		return nil, s.conn.handleFatalErrorLocked(err)
 	}
+	if len(initialRows) > 0 {
+		if err := s.conn.materializeBlobRowsLocked(txHandle, s.outputs, initialRows); err != nil {
+			if autoCommit {
+				s.conn.invalidateAutoTx()
+			}
+			return nil, s.conn.handleFatalErrorLocked(err)
+		}
+	}
 
 	return &rows{
 		conn:          s.conn,

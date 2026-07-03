@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gabrielxsuarez/go-firebird-driver/wire"
 )
 
 // Bug: BOOLEAN bindeado como parámetro se codificaba con el byte significativo
@@ -412,6 +414,137 @@ func TestRegressionErrorMessageText(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Errorf("el error debería contener %q: %s", want, msg)
 		}
+	}
+}
+
+// Bug: un BLOB no-NULL con blob id 0 (blob vacío; aparece en bases legacy,
+// p.ej. interacciones.fdb col MANEJO) se filtraba al usuario como int64(0)
+// en vez de ""/[]byte{}. Un servidor moderno no genera ids 0, así que el caso
+// se cubre a nivel unitario sobre la materialización.
+func TestRegressionEmptyBlobIDZero(t *testing.T) {
+	c := &conn{config: &Config{Charset: "UTF8"}}
+	outputs := []wire.ColumnDescriptor{
+		{SQLType: wire.SQLBlob, SubType: 1}, // texto
+		{SQLType: wire.SQLBlob, SubType: 0}, // binario
+		{SQLType: wire.SQLBlob, SubType: 1}, // NULL real: no se toca
+	}
+	rowsData := [][]any{{int64(0), int64(0), nil}}
+	if err := c.materializeBlobRowsLocked(0, outputs, rowsData); err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	if got, ok := rowsData[0][0].(string); !ok || got != "" {
+		t.Errorf("blob texto vacío: esperaba \"\", obtuve %#v", rowsData[0][0])
+	}
+	if got, ok := rowsData[0][1].([]byte); !ok || len(got) != 0 {
+		t.Errorf("blob binario vacío: esperaba []byte{}, obtuve %#v", rowsData[0][1])
+	}
+	if rowsData[0][2] != nil {
+		t.Errorf("blob NULL: esperaba nil, obtuve %#v", rowsData[0][2])
+	}
+}
+
+// Bug: las filas iniciales de EXECUTE PROCEDURE (camino Execute2, tanto ad-hoc
+// como preparado) se entregaban sin materializar blobs: el usuario recibía el
+// blob id interno (int64) en vez del contenido.
+func TestRegressionExecProcedureBlobMaterialized(t *testing.T) {
+	db := openTestDB(t)
+	mustExec(t, db, `RECREATE PROCEDURE regr_blob_proc (modo INTEGER)
+RETURNS (bt BLOB SUB_TYPE TEXT, bb BLOB SUB_TYPE 0) AS
+BEGIN
+  IF (modo = 1) THEN
+  BEGIN
+    bt = 'contenido del blob';
+    bb = 'bytes';
+  END
+  ELSE IF (modo = 2) THEN
+  BEGIN
+    bt = '';
+    bb = '';
+  END
+END`)
+	t.Cleanup(func() { _, _ = db.Exec("DROP PROCEDURE regr_blob_proc") })
+
+	check := func(t *testing.T, scan func(modo int, dest ...any) error) {
+		t.Helper()
+		var bt sql.NullString
+		var bb []byte
+		// Con datos: antes del fix llegaba el blob id como int64.
+		if err := scan(1, &bt, &bb); err != nil {
+			t.Fatalf("modo 1: %v", err)
+		}
+		if !bt.Valid || bt.String != "contenido del blob" {
+			t.Errorf("modo 1 texto: esperaba contenido, obtuve %#v", bt)
+		}
+		if string(bb) != "bytes" {
+			t.Errorf("modo 1 binario: esperaba \"bytes\", obtuve %#v", bb)
+		}
+		// Vacío: debe llegar ""/[]byte{}, nunca un número.
+		if err := scan(2, &bt, &bb); err != nil {
+			t.Fatalf("modo 2: %v", err)
+		}
+		if !bt.Valid || bt.String != "" {
+			t.Errorf("modo 2 texto: esperaba \"\" no-NULL, obtuve %#v", bt)
+		}
+		if bb == nil || len(bb) != 0 {
+			t.Errorf("modo 2 binario: esperaba []byte{}, obtuve %#v", bb)
+		}
+		// NULL: los outputs sin asignar son NULL.
+		if err := scan(3, &bt, &bb); err != nil {
+			t.Fatalf("modo 3: %v", err)
+		}
+		if bt.Valid {
+			t.Errorf("modo 3 texto: esperaba NULL, obtuve %#v", bt)
+		}
+		if bb != nil {
+			t.Errorf("modo 3 binario: esperaba nil, obtuve %#v", bb)
+		}
+	}
+
+	t.Run("adhoc", func(t *testing.T) {
+		check(t, func(modo int, dest ...any) error {
+			return db.QueryRow("EXECUTE PROCEDURE regr_blob_proc(?)", modo).Scan(dest...)
+		})
+	})
+	t.Run("preparado", func(t *testing.T) {
+		stmt, err := db.Prepare("EXECUTE PROCEDURE regr_blob_proc(?)")
+		if err != nil {
+			t.Fatalf("prepare: %v", err)
+		}
+		defer stmt.Close()
+		check(t, func(modo int, dest ...any) error {
+			return stmt.QueryRow(modo).Scan(dest...)
+		})
+	})
+}
+
+// Regresión del contrato de blobs por SELECT normal: con datos, vacío y NULL
+// deben distinguirse (vacío ≠ NULL, y nunca un int64 interno).
+func TestRegressionBlobEmptyVsNull(t *testing.T) {
+	db := openTestDB(t)
+	mustExec(t, db, "RECREATE TABLE regr_blob (id INTEGER, bt BLOB SUB_TYPE TEXT, bb BLOB SUB_TYPE 0)")
+	mustExec(t, db, "INSERT INTO regr_blob VALUES (1, ?, ?)", "hola", []byte{1, 2, 3})
+	mustExec(t, db, "INSERT INTO regr_blob VALUES (2, ?, ?)", "", []byte{})
+	mustExec(t, db, "INSERT INTO regr_blob VALUES (3, NULL, NULL)")
+
+	var bt sql.NullString
+	var bb []byte
+	if err := db.QueryRow("SELECT bt, bb FROM regr_blob WHERE id = 1").Scan(&bt, &bb); err != nil {
+		t.Fatalf("id 1: %v", err)
+	}
+	if !bt.Valid || bt.String != "hola" || string(bb) != "\x01\x02\x03" {
+		t.Errorf("id 1: esperaba (hola, 010203), obtuve (%#v, %#v)", bt, bb)
+	}
+	if err := db.QueryRow("SELECT bt, bb FROM regr_blob WHERE id = 2").Scan(&bt, &bb); err != nil {
+		t.Fatalf("id 2: %v", err)
+	}
+	if !bt.Valid || bt.String != "" || bb == nil || len(bb) != 0 {
+		t.Errorf("id 2: esperaba vacíos no-NULL, obtuve (%#v, %#v)", bt, bb)
+	}
+	if err := db.QueryRow("SELECT bt, bb FROM regr_blob WHERE id = 3").Scan(&bt, &bb); err != nil {
+		t.Fatalf("id 3: %v", err)
+	}
+	if bt.Valid || bb != nil {
+		t.Errorf("id 3: esperaba NULLs, obtuve (%#v, %#v)", bt, bb)
 	}
 }
 

@@ -198,27 +198,10 @@ func (r *rows) fetch() error {
 	// Materialize BLOBs: replace blobIDs with actual content.
 	// Skip the check entirely if no blob columns exist for this result set.
 	if r.hasBlobs {
-		for _, row := range fetched {
-			for ci, col := range r.outputs {
-				if col.SQLType&^int32(1) != wire.SQLBlob || ci >= len(row) || row[ci] == nil {
-					continue
-				}
-				blobID, ok := row[ci].(int64)
-				if !ok || blobID == 0 {
-					continue
-				}
-				data, err := r.conn.wc.ReadBlobData(r.txHandle, blobID)
-				if err != nil {
-					handled := r.conn.handleFatalErrorLocked(err)
-					r.conn.mu.Unlock()
-					return fmt.Errorf("read blob column %d: %w", ci, handled)
-				}
-				if col.SubType == 1 {
-					row[ci] = fbcharset.Decode(fbcharset.CharsetID(r.conn.config.Charset), data) // text blob
-				} else {
-					row[ci] = data // binary blob
-				}
-			}
+		if err := r.conn.materializeBlobRowsLocked(r.txHandle, r.outputs, fetched); err != nil {
+			handled := r.conn.handleFatalErrorLocked(err)
+			r.conn.mu.Unlock()
+			return handled
 		}
 	}
 
@@ -239,6 +222,41 @@ func (r *rows) contextErr() error {
 		return nil
 	}
 	return r.ctx.Err()
+}
+
+// materializeBlobRowsLocked reemplaza los blob IDs crudos (int64) por el
+// contenido del blob en las filas dadas. Un blob no-NULL con id 0 es un blob
+// vacío (aparece en bases legacy): se convierte en "" (texto) o []byte{}
+// (binario) para que el int64 interno nunca llegue al usuario. El caller debe
+// tener c.mu tomado y pasar el error por handleFatalErrorLocked.
+func (c *conn) materializeBlobRowsLocked(txHandle int32, outputs []wire.ColumnDescriptor, rowsData [][]any) error {
+	for _, row := range rowsData {
+		for ci, col := range outputs {
+			if col.SQLType&^int32(1) != wire.SQLBlob || ci >= len(row) || row[ci] == nil {
+				continue
+			}
+			blobID, ok := row[ci].(int64)
+			if !ok {
+				continue
+			}
+			var data []byte
+			if blobID != 0 {
+				var err error
+				data, err = c.wc.ReadBlobData(txHandle, blobID)
+				if err != nil {
+					return fmt.Errorf("read blob column %d: %w", ci, err)
+				}
+			}
+			if col.SubType == 1 {
+				row[ci] = fbcharset.Decode(fbcharset.CharsetID(c.config.Charset), data) // text blob
+			} else if data == nil {
+				row[ci] = []byte{} // binary blob vacío
+			} else {
+				row[ci] = data // binary blob
+			}
+		}
+	}
+	return nil
 }
 
 // hasBlobs returns true if any column is a BLOB type.

@@ -82,24 +82,29 @@ una base estática leída desde el mismo servidor); la re-comparación quedó co
 Resultado de la re-comparación (sin ORDER BY): **8 diferencias, todas en la misma columna de
 una base**, ver el hallazgo abierto de abajo.
 
-## HALLAZGO ABIERTO (retomar acá) — BLOB vacío devuelto como int64(0)
+## HALLAZGO CERRADO (2026-07-03) — BLOB vacío devuelto como int64(0)
 
-**Bug real confirmado, sin corregir aún** (se pausó para documentar antes de arreglar).
+**Corregido.** Al arreglarlo apareció un segundo bug peor en el mismo código.
 
-- Reproducción: `interacciones.fdb` (dialecto 1), tabla `INTERACCIONES`, columna `MANEJO`
-  (BLOB SUB_TYPE 1 TEXT, charset id 21). Nuestro driver devuelve `int64(0)`; nakagami devuelve
+- Reproducción original: `interacciones.fdb` (dialecto 1), tabla `INTERACCIONES`, columna `MANEJO`
+  (BLOB SUB_TYPE 1 TEXT, charset id 21). Nuestro driver devolvía `int64(0)`; nakagami devuelve
   bytes vacíos. 8 filas afectadas → las 8 únicas diferencias contra nakagami en las 37 bases.
-- Causa raíz: `rows.go:206-209`. Cuando una columna BLOB tiene `blobID == 0` (blob vacío), la
-  materialización hace `continue` y deja en la fila el `int64(0)` interno (el blobID crudo),
-  filtrándolo al usuario. Los NULL reales ya se filtran antes (`row[ci] == nil` en la línea 203),
-  así que un blob no-nil con blobID 0 es un blob **vacío**.
-- Fix propuesto: en el branch `blobID == 0`, en vez de `continue`, asignar el valor vacío según
-  subtype — `row[ci] = ""` para SUB_TYPE 1 (texto) y `row[ci] = []byte{}` para binario — para no
-  filtrar nunca el int64 interno. Añadir test de regresión (crear tabla con BLOB, insertar valor
-  vacío vs NULL vs con datos, verificar los tres). Comprobar también el camino de `Execute2`/rows
-  iniciales por si comparten el patrón. Tras el fix, re-correr la comparación: debería dar 0.
-- Herramientas para retomar (scratchpad): `oracle/` (readers por build-tag `nak`, comparación
-  por líneas canónicas), `probe/pertable/` (diagnóstico tabla-por-tabla con timeout).
+- Causa raíz 1: en la materialización de blobs de `rows.fetch`, el branch `blobID == 0` (blob
+  vacío legacy, no NULL) hacía `continue` y dejaba en la fila el `int64(0)` interno (el blobID
+  crudo), filtrándolo al usuario.
+- **Causa raíz 2 (encontrada durante el fix)**: los dos caminos de `Execute2` (EXECUTE PROCEDURE,
+  ad-hoc en `connection.go` y preparado en `statement.go`) ponían las filas iniciales en `buf`
+  con `eof=true` **sin materializar blobs jamás**: un procedure que devolviera un BLOB con datos
+  entregaba el blobID interno como `int64` al usuario.
+- Fix: la materialización se extrajo a `conn.materializeBlobRowsLocked` (`rows.go`), que además
+  convierte blob no-NULL con id 0 en `""` (SUB_TYPE 1) / `[]byte{}` (binario); se invoca desde
+  `rows.fetch` y desde ambos sitios de `Execute2`.
+- Tests de regresión (`regression_test.go`): `TestRegressionEmptyBlobIDZero` (unitario, un server
+  moderno no genera ids 0), `TestRegressionExecProcedureBlobMaterialized` (datos/vacío/NULL ×
+  ad-hoc/preparado, texto y binario) y `TestRegressionBlobEmptyVsNull` (SELECT normal). Verificados
+  contra FB3, FB4 y FB5.
+- Re-comparación vs nakagami sobre las 37 bases reales tras el fix: **0 diferencias** (incluida
+  `interacciones`).
 
 ## Pendiente para fases posteriores (no Fase 2)
 
