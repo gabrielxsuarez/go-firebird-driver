@@ -613,6 +613,12 @@ func (wc *WireConnection) Fetch(stmtHandle int32, blr []byte, fetchSize int32) (
 	}
 
 	if op != opFetchResponse {
+		if op == opResponse {
+			// El servidor reporta un error del statement (p.ej. excepción
+			// aritmética al evaluar una fila): consumir el cuerpo mantiene el
+			// stream sincronizado y expone el error real.
+			return 0, 0, fetchServerError(wc)
+		}
 		return 0, 0, fmt.Errorf("op_fetch: unexpected opcode %d, expected %d", op, opFetchResponse)
 	}
 
@@ -700,6 +706,10 @@ func (wc *WireConnection) FetchRowsReuse(
 		}
 
 		if op != opFetchResponse {
+			if op == opResponse {
+				// Error del statement en medio del lote (ver Fetch).
+				return nil, allValues, false, fetchServerError(wc)
+			}
 			return nil, allValues, false, fmt.Errorf("op_fetch: unexpected opcode %d, expected %d", op, opFetchResponse)
 		}
 
@@ -1156,4 +1166,19 @@ func (wc *WireConnection) WriteBlobData(txHandle int32, data []byte) (int64, err
 		return 0, err
 	}
 	return blobID, nil
+}
+
+// fetchServerError consumes an op_response body that arrived where an
+// op_fetch_response was expected and returns the server's real error.
+// Reading the full response keeps the wire stream synchronized so the
+// connection remains usable.
+func fetchServerError(wc *WireConnection) error {
+	resp := wc.reader.readGenericResponse()
+	if wc.reader.Err() != nil {
+		return fmt.Errorf("op_fetch: read error response: %w", wc.reader.Err())
+	}
+	if resp.Status.HasError() {
+		return fmt.Errorf("op_fetch: %w", &StatusError{SV: resp.Status})
+	}
+	return fmt.Errorf("op_fetch: server returned op_response without error status")
 }

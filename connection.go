@@ -5,6 +5,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"sync"
 	"time"
@@ -325,6 +326,11 @@ func (c *conn) ExecContext(ctx context.Context, query string, args []driver.Name
 
 	stmtType, _, inputs := wire.ParseSQLDescribeInfo(infoData)
 
+	if len(args) != len(inputs) {
+		_ = c.wc.RecycleStatement(stmtHandle, false)
+		return nil, fmt.Errorf("firebird: statement expects %d parameters, got %d", len(inputs), len(args))
+	}
+
 	// Encode params and execute
 	var blr, paramData []byte
 	if len(inputs) > 0 && len(args) > 0 {
@@ -442,6 +448,11 @@ func (c *conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 		c.descCacheStore(query, stmtType, outputs, inputs)
 	}
 
+	if len(args) != len(inputs) {
+		_ = c.wc.RecycleStatement(stmtHandle, false)
+		return nil, fmt.Errorf("firebird: statement expects %d parameters, got %d", len(inputs), len(args))
+	}
+
 	// Encode params and execute
 	var blr, paramData []byte
 	if len(inputs) > 0 && len(args) > 0 {
@@ -494,18 +505,19 @@ func (c *conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 	}
 
 	return &rows{
-		conn:         c,
-		ctx:          ctx,
-		stmtHandle:   stmtHandle,
-		txHandle:     txHandle,
-		outputs:      outputs,
-		fetchSize:    c.fetchSize,
-		autoFreeStmt: autoCommit,
-		autoCommitTx: autoCommit,
-		hasCursor:    hasCursor,
-		buf:          initialRows,
-		eof:          eof,
-		hasBlobs:     hasBlobs(outputs),
+		conn:          c,
+		ctx:           ctx,
+		stmtHandle:    stmtHandle,
+		txHandle:      txHandle,
+		outputs:       outputs,
+		fetchSize:     c.fetchSize,
+		autoFreeStmt:  autoCommit,
+		autoCommitTx:  autoCommit,
+		commitOnClose: autoCommit && stmtType != wire.StmtSelect && stmtType != wire.StmtSelectForUpd,
+		hasCursor:     hasCursor,
+		buf:           initialRows,
+		eof:           eof,
+		hasBlobs:      hasBlobs(outputs),
 	}, nil
 }
 
@@ -540,6 +552,9 @@ func (c *conn) IsValid() bool {
 
 // CheckNamedValue implements driver.NamedValueChecker.
 func (c *conn) CheckNamedValue(nv *driver.NamedValue) error {
+	if nv.Name != "" {
+		return fmt.Errorf("firebird: named parameters are not supported; use positional '?' placeholders")
+	}
 	switch v := nv.Value.(type) {
 	case nil, int64, float64, bool, string, []byte, time.Time:
 		return nil
@@ -552,6 +567,9 @@ func (c *conn) CheckNamedValue(nv *driver.NamedValue) error {
 	case int32:
 		nv.Value = int64(v)
 	case uint:
+		if uint64(v) > math.MaxInt64 {
+			return fmt.Errorf("firebird: uint value %d overflows BIGINT", v)
+		}
 		nv.Value = int64(v)
 	case uint8:
 		nv.Value = int64(v)
@@ -560,6 +578,9 @@ func (c *conn) CheckNamedValue(nv *driver.NamedValue) error {
 	case uint32:
 		nv.Value = int64(v)
 	case uint64:
+		if v > math.MaxInt64 {
+			return fmt.Errorf("firebird: uint64 value %d overflows BIGINT", v)
+		}
 		nv.Value = int64(v)
 	case float32:
 		nv.Value = float64(v)

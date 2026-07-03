@@ -40,10 +40,37 @@ const timeTicksPerSecond = 10000
 // --- Date/Time conversions ---
 
 // DateToMJD converts a time.Time to Modified Julian Date (days since epoch).
+// Uses the wall-clock date (like TimeToTicks uses the wall clock) and civil
+// arithmetic: time.Duration saturates at ±292 years, which corrupts dates
+// beyond ~2150, and converting to UTC shifts the date across midnight for
+// non-UTC locations.
 func DateToMJD(t time.Time) int32 {
-	t = t.UTC()
-	days := t.Sub(mjdEpoch).Hours() / 24
-	return int32(days)
+	y, m, d := t.Date()
+	return int32(civilToUnixDays(y, int(m), d) + unixToMJDOffset)
+}
+
+// unixToMJDOffset is the number of days between the MJD epoch (1858-11-17)
+// and the Unix epoch (1970-01-01).
+const unixToMJDOffset = 40587
+
+// civilToUnixDays converts a civil date to days since the Unix epoch
+// (Howard Hinnant's days_from_civil algorithm; proleptic Gregorian).
+func civilToUnixDays(y, m, d int) int64 {
+	if m <= 2 {
+		y--
+	}
+	era := y / 400
+	if y < 0 && y%400 != 0 {
+		era--
+	}
+	yoe := y - era*400 // [0, 399]
+	mp := m + 9
+	if m > 2 {
+		mp = m - 3
+	}
+	doy := (153*mp+2)/5 + d - 1            // [0, 365]
+	doe := yoe*365 + yoe/4 - yoe/100 + doy // [0, 146096]
+	return int64(era)*146097 + int64(doe) - 719468
 }
 
 // MJDToDate converts a Modified Julian Date to time.Time.
@@ -597,11 +624,17 @@ func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) error {
 		w.WriteInt64(v)
 
 	case SQLFloat:
-		v := toFloat64(value)
+		v, err := floatValue(value)
+		if err != nil {
+			return err
+		}
 		w.WriteUInt32(math.Float32bits(float32(v)))
 
 	case SQLDouble:
-		v := toFloat64(value)
+		v, err := floatValue(value)
+		if err != nil {
+			return err
+		}
 		if w.n+8 > len(w.buf) {
 			return nil
 		}
@@ -609,23 +642,28 @@ func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) error {
 		w.n += 8
 
 	case SQLBoolean:
-		v := toBool(value)
-		if v {
-			w.WriteInt32(1)
-		} else {
-			w.WriteInt32(0)
-		}
+		// XDR de BOOLEAN: el byte significativo va primero, con 3 bytes de padding.
+		w.WriteUInt32(boolWireValue(toBool(value)))
 
 	case SQLTypeDate:
-		t := toTime(value)
+		t, err := timeValue(value)
+		if err != nil {
+			return err
+		}
 		w.WriteInt32(DateToMJD(t))
 
 	case SQLTypeTime:
-		t := toTime(value)
+		t, err := timeValue(value)
+		if err != nil {
+			return err
+		}
 		w.WriteUInt32(TimeToTicks(t))
 
 	case SQLTimestamp:
-		t := toTime(value)
+		t, err := timeValue(value)
+		if err != nil {
+			return err
+		}
 		w.WriteInt32(DateToMJD(t))
 		w.WriteUInt32(TimeToTicks(t))
 
@@ -684,14 +722,22 @@ func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) error {
 		w.n += 16
 
 	case SQLTimestampTZ, SQLTimestampTZEx:
-		utc, offset, offsetMinutes := timezoneParts(toTime(value))
+		tv, err := timeValue(value)
+		if err != nil {
+			return err
+		}
+		utc, offset, offsetMinutes := timezoneParts(tv)
 		w.WriteInt32(DateToMJD(utc))
 		w.WriteUInt32(TimeToTicks(utc))
 		w.WriteUInt32(tzOffsetToID(offset))
 		w.WriteInt32(offsetMinutes)
 
 	case SQLTimeTZ, SQLTimeTZEx:
-		utc, offset, offsetMinutes := timezoneParts(toTime(value))
+		tv, err := timeValue(value)
+		if err != nil {
+			return err
+		}
+		utc, offset, offsetMinutes := timezoneParts(tv)
 		w.WriteUInt32(TimeToTicks(utc))
 		w.WriteUInt32(tzOffsetToID(offset))
 		w.WriteInt32(offsetMinutes)
@@ -791,33 +837,44 @@ func encodeValue(w *Writer, desc *ColumnDescriptor, value any) error {
 		w.WriteInt64(v)
 
 	case SQLFloat:
-		v := toFloat64(value)
+		v, err := floatValue(value)
+		if err != nil {
+			return err
+		}
 		w.WriteUInt32(math.Float32bits(float32(v)))
 
 	case SQLDouble:
-		v := toFloat64(value)
+		v, err := floatValue(value)
+		if err != nil {
+			return err
+		}
 		w.grow(8)
 		binary.BigEndian.PutUint64(w.buf[w.n:], math.Float64bits(v))
 		w.n += 8
 
 	case SQLBoolean:
-		v := toBool(value)
-		if v {
-			w.WriteInt32(1)
-		} else {
-			w.WriteInt32(0)
-		}
+		// XDR de BOOLEAN: el byte significativo va primero, con 3 bytes de padding.
+		w.WriteUInt32(boolWireValue(toBool(value)))
 
 	case SQLTypeDate:
-		t := toTime(value)
+		t, err := timeValue(value)
+		if err != nil {
+			return err
+		}
 		w.WriteInt32(DateToMJD(t))
 
 	case SQLTypeTime:
-		t := toTime(value)
+		t, err := timeValue(value)
+		if err != nil {
+			return err
+		}
 		w.WriteUInt32(TimeToTicks(t))
 
 	case SQLTimestamp:
-		t := toTime(value)
+		t, err := timeValue(value)
+		if err != nil {
+			return err
+		}
 		w.WriteInt32(DateToMJD(t))
 		w.WriteUInt32(TimeToTicks(t))
 
@@ -872,14 +929,22 @@ func encodeValue(w *Writer, desc *ColumnDescriptor, value any) error {
 		w.n += 16
 
 	case SQLTimestampTZ, SQLTimestampTZEx:
-		utc, offset, offsetMinutes := timezoneParts(toTime(value))
+		tv, err := timeValue(value)
+		if err != nil {
+			return err
+		}
+		utc, offset, offsetMinutes := timezoneParts(tv)
 		w.WriteInt32(DateToMJD(utc))
 		w.WriteUInt32(TimeToTicks(utc))
 		w.WriteUInt32(tzOffsetToID(offset))
 		w.WriteInt32(offsetMinutes)
 
 	case SQLTimeTZ, SQLTimeTZEx:
-		utc, offset, offsetMinutes := timezoneParts(toTime(value))
+		tv, err := timeValue(value)
+		if err != nil {
+			return err
+		}
+		utc, offset, offsetMinutes := timezoneParts(tv)
 		w.WriteUInt32(TimeToTicks(utc))
 		w.WriteUInt32(tzOffsetToID(offset))
 		w.WriteInt32(offsetMinutes)
@@ -1130,20 +1195,28 @@ func numericOverflow(value any, scale int32) error {
 	return fmt.Errorf("firebird: numeric value %v overflows scale %d", value, scale)
 }
 
-func toFloat64(v any) float64 {
+// floatValue converts a parameter value to float64, rejecting values that
+// would otherwise be silently encoded as 0.
+func floatValue(v any) (float64, error) {
 	switch x := v.(type) {
 	case float32:
-		return float64(x)
+		return float64(x), nil
 	case float64:
-		return x
+		return x, nil
 	case int:
-		return float64(x)
+		return float64(x), nil
 	case int32:
-		return float64(x)
+		return float64(x), nil
 	case int64:
-		return float64(x)
+		return float64(x), nil
+	case string:
+		f, err := strconv.ParseFloat(x, 64)
+		if err != nil {
+			return 0, fmt.Errorf("firebird: cannot convert string %q to FLOAT/DOUBLE parameter", x)
+		}
+		return f, nil
 	default:
-		return 0
+		return 0, fmt.Errorf("firebird: unsupported type %T for FLOAT/DOUBLE parameter", v)
 	}
 }
 
@@ -1162,13 +1235,24 @@ func toBool(v any) bool {
 	}
 }
 
-func toTime(v any) time.Time {
+// timeValue converts a parameter value to time.Time, rejecting values that
+// would otherwise be silently encoded as the zero time.
+func timeValue(v any) (time.Time, error) {
 	switch x := v.(type) {
 	case time.Time:
-		return x
+		return x, nil
 	default:
-		return time.Time{}
+		return time.Time{}, fmt.Errorf("firebird: unsupported type %T for DATE/TIME/TIMESTAMP parameter", v)
 	}
+}
+
+// boolWireValue returns the XDR wire encoding of a BOOLEAN parameter:
+// the significant byte goes first, followed by 3 bytes of padding.
+func boolWireValue(v bool) uint32 {
+	if v {
+		return 1 << 24
+	}
+	return 0
 }
 
 func toString(v any) string {

@@ -138,12 +138,22 @@ func (s *stmt) ExecContext(ctx context.Context, args []driver.NamedValue) (drive
 		}
 	}
 
-	// Execute (no per-exec commit — commit is deferred to stmt.Close)
+	// Execute. En autocommit el commit es inmediato: database/sql cachea los
+	// statements preparados sin cerrarlos, así que diferir el commit a
+	// stmt.Close dejaría los cambios invisibles para otras conexiones y no
+	// durables ante un corte.
 	var err error
-	if s.stmtType == wire.StmtExecProcedure {
+	switch {
+	case s.stmtType == wire.StmtExecProcedure:
 		outBLR := []byte{}
 		_, _, err = s.conn.wc.Execute2(s.handle, txHandle, blr, paramData, outBLR, nil)
-	} else {
+		if err == nil && autoCommit {
+			err = s.conn.wc.CommitRetaining(txHandle)
+		}
+	case autoCommit:
+		// execute + commit_retaining en un solo flush
+		err = s.conn.wc.ExecuteAndCommitRetaining(s.handle, txHandle, blr, paramData)
+	default:
 		err = s.conn.wc.Execute(s.handle, txHandle, blr, paramData)
 	}
 
@@ -154,14 +164,16 @@ func (s *stmt) ExecContext(ctx context.Context, args []driver.NamedValue) (drive
 		return nil, s.conn.handleFatalErrorLocked(err)
 	}
 
-	if autoCommit {
-		s.conn.dirtyAutoTx = true
-	}
+	// RowsAffected se calcula acá, bajo conn.mu: hacerlo lazy en result
+	// implicaría I/O de wire sobre una conexión que el pool pudo reasignar.
+	rowsAffected := getRowsAffected(s.conn.wc, s.handle, s.stmtType)
 
 	return &result{
 		wc:         s.conn.wc,
 		stmtHandle: s.handle,
 		stmtType:   s.stmtType,
+		cached:     rowsAffected,
+		computed:   true,
 	}, nil
 }
 
@@ -232,19 +244,20 @@ func (s *stmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driv
 	}
 
 	return &rows{
-		conn:         s.conn,
-		ctx:          ctx,
-		stmtHandle:   s.handle,
-		txHandle:     txHandle,
-		outputs:      s.outputs,
-		fetchSize:    s.fetchSize,
-		autoFreeStmt: false, // prepared stmt manages its own lifetime
-		autoCommitTx: autoCommit,
-		hasCursor:    hasCursor,
-		buf:          initialRows,
-		eof:          eof,
-		blr:          outBLR,
-		hasBlobs:     hasBlobs(s.outputs),
+		conn:          s.conn,
+		ctx:           ctx,
+		stmtHandle:    s.handle,
+		txHandle:      txHandle,
+		outputs:       s.outputs,
+		fetchSize:     s.fetchSize,
+		autoFreeStmt:  false, // prepared stmt manages its own lifetime
+		autoCommitTx:  autoCommit,
+		commitOnClose: autoCommit && s.stmtType != wire.StmtSelect && s.stmtType != wire.StmtSelectForUpd,
+		hasCursor:     hasCursor,
+		buf:           initialRows,
+		eof:           eof,
+		blr:           outBLR,
+		hasBlobs:      hasBlobs(s.outputs),
 	}, nil
 }
 

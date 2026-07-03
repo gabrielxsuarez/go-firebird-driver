@@ -22,8 +22,13 @@ type rows struct {
 	outputs      []wire.ColumnDescriptor
 	fetchSize    int
 	autoFreeStmt bool // if true, frees stmt on close (ad-hoc queries only)
-	autoCommitTx bool // if true, commits tx on close
-	hasCursor    bool
+	autoCommitTx bool // if true, the query ran on the persistent auto-commit tx
+	// commitOnClose: DML ejecutado por el camino de Query en autocommit
+	// (INSERT ... RETURNING, UPDATE/DELETE vía Query, EXECUTE PROCEDURE):
+	// hay que commit-retaining al cerrar o los cambios quedan invisibles.
+	// Para SELECT queda en false y el cierre no paga ningún roundtrip extra.
+	commitOnClose bool
+	hasCursor     bool
 
 	// fetch buffer
 	buf         [][]any
@@ -101,16 +106,17 @@ func (r *rows) Close() error {
 		// Close cursor but keep statement
 		err = r.conn.handleFatalErrorLocked(r.conn.wc.FreeStatement(r.stmtHandle, wire.DSQLClose))
 	}
+	if r.commitOnClose && !r.conn.bad {
+		if cerr := r.conn.wc.CommitRetaining(r.txHandle); cerr != nil {
+			r.conn.invalidateAutoTx()
+			cerr = r.conn.handleFatalErrorLocked(cerr)
+			if err == nil {
+				err = cerr
+			}
+		}
+	}
 	r.conn.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	if r.autoCommitTx {
-		// Persistent auto-tx: no commit needed, tx stays alive for reuse.
-		// Data is already visible since we use READ COMMITTED.
-		return nil
-	}
-	return nil
+	return err
 }
 
 // Next implements driver.Rows.
