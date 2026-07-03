@@ -133,7 +133,7 @@ func newConnection(ctx context.Context, cfg *Config) (*conn, error) {
 	var wc *wire.WireConnection
 	var err error
 	for attempt := range maxConnRetries {
-		wc, err = wire.Connect(wireCfg)
+		wc, err = wire.ConnectContext(ctx, wireCfg)
 		if err == nil {
 			break
 		}

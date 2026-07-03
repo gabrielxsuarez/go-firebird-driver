@@ -1,7 +1,8 @@
 package wire
 
 import (
-	"crypto/sha256"
+	"bytes"
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -65,7 +66,16 @@ func supportedProtocols() []protocolDescriptor {
 // Connect performs the full Firebird wire protocol handshake:
 // TCP connect → op_connect → auth loop → op_crypt → op_attach.
 // Returns a WireConnection ready for use.
+// Connect establishes a connection using context.Background.
 func Connect(cfg *ProtocolConfig) (*WireConnection, error) {
+	return ConnectContext(context.Background(), cfg)
+}
+
+// ConnectContext establishes a connection honoring ctx for the TCP dial and
+// the whole handshake (auth + crypt negotiation). Without a deadline here, a
+// server that accepts TCP but never answers would hang Connect forever and
+// database/sql connection timeouts would not be respected.
+func ConnectContext(ctx context.Context, cfg *ProtocolConfig) (*WireConnection, error) {
 	if cfg.Charset == "" {
 		cfg.Charset = "UTF8"
 	}
@@ -93,9 +103,14 @@ func Connect(cfg *ProtocolConfig) (*WireConnection, error) {
 
 	// TCP connect
 	addr := net.JoinHostPort(cfg.Host, cfg.Port)
-	tcpConn, err := net.Dial("tcp", addr)
+	var dialer net.Dialer
+	tcpConn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("op_connect: dial %s: %w", addr, err)
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = tcpConn.SetDeadline(deadline)
+		defer func() { _ = tcpConn.SetDeadline(time.Time{}) }()
 	}
 	if tcp, ok := tcpConn.(*net.TCPConn); ok {
 		_ = tcp.SetNoDelay(true)
@@ -181,6 +196,13 @@ func Connect(cfg *ProtocolConfig) (*WireConnection, error) {
 
 	// Handle authentication
 	if serverPlugin != "" && serverPlugin != srp.pluginName {
+		// Only switch between plugins we actually implement (the SRP family).
+		// Renaming blindly would send SRP data under an arbitrary plugin name
+		// (e.g. Legacy_Auth) and fail later with a misleading isc_login error.
+		if serverPlugin != PluginSrp && serverPlugin != PluginSrp256 {
+			conn.Close()
+			return nil, fmt.Errorf("op_connect: server requires unsupported auth plugin %q (supported: %s)", serverPlugin, cfg.AuthPluginList)
+		}
 		srp.SetPlugin(serverPlugin)
 	}
 
@@ -208,7 +230,11 @@ func Connect(cfg *ProtocolConfig) (*WireConnection, error) {
 			conn.Close()
 			return nil, fmt.Errorf("op_cont_auth: %w", err)
 		}
-		_ = resp
+		// La respuesta final de autenticación trae las keys de wire crypt del
+		// servidor (plugins ofrecidos + IV de ChaCha) en resp.Data.
+		if len(resp.Data) > 0 {
+			serverKeys = copyBytes(resp.Data)
+		}
 	} else if authenticated == 0 {
 		// No auth data: server switched plugins or needs another round.
 		// Re-send the client public key with the (possibly new) plugin name.
@@ -291,13 +317,23 @@ func Connect(cfg *ProtocolConfig) (*WireConnection, error) {
 
 	// Activate wire encryption
 	sessionKey := srp.SessionKey()
+	if cfg.WireCrypt == WireCryptRequired && len(sessionKey) == 0 {
+		conn.Close()
+		return nil, fmt.Errorf("op_crypt: wire_crypt=required but the negotiated auth produced no session key (server may not support wire encryption)")
+	}
 	if cfg.WireCrypt != WireCryptDisabled && len(sessionKey) > 0 {
+		if os.Getenv("FBDEBUG_CRYPT") != "" {
+			fmt.Fprintln(os.Stderr, fmt.Sprintf("FBDEBUG serverKeys (%d bytes): %x", len(serverKeys), serverKeys))
+		}
 		cipherName, readCipher, writeCipher, err := selectCipher(serverKeys, sessionKey)
 		if err != nil && cfg.WireCrypt == WireCryptRequired {
 			conn.Close()
 			return nil, fmt.Errorf("op_crypt: %w", err)
 		}
 		if err == nil {
+			if os.Getenv("FBDEBUG_CRYPT") != "" {
+				fmt.Fprintln(os.Stderr, "FBDEBUG negotiated cipher: "+cipherName)
+			}
 			// Send op_crypt in plaintext
 			w.WriteInt32(opCrypt)
 			w.WriteString(cipherName)
@@ -356,23 +392,23 @@ func Connect(cfg *ProtocolConfig) (*WireConnection, error) {
 }
 
 // selectCipher parses server keys and creates appropriate cipher instances.
+// Preference order: ChaCha (if the server offers it with an IV), then Arc4.
 func selectCipher(serverKeys []byte, sessionKey []byte) (string, streamCipher, streamCipher, error) {
-	// Parse server key types from the accept response.
-	// The keys buffer is a serialized structure; for simplicity, try ChaCha first, then Arc4.
+	plugins, chachaIV := parseServerKeys(serverKeys)
 
-	// Try ChaCha20 (needs a nonce from server keys)
-	if nonce := extractChaChaData(serverKeys); nonce != nil {
-		keyHash := sha256.Sum256(sessionKey)
-		rc, err := newChaCha20Cipher(keyHash[:], nonce)
-		if err == nil {
-			wc, err := newChaCha20Cipher(keyHash[:], nonce)
-			if err == nil {
-				return "ChaCha", rc, wc, nil
-			}
+	if pluginListed(plugins, "ChaCha") && chachaIV != nil {
+		// La clave es SHA-256(sessionKey) — un solo hash (newChaCha20Cipher lo aplica).
+		rc, rerr := newChaCha20Cipher(sessionKey, chachaIV)
+		wc, werr := newChaCha20Cipher(sessionKey, chachaIV)
+		if rerr == nil && werr == nil {
+			return "ChaCha", rc, wc, nil
 		}
 	}
 
-	// Fall back to Arc4
+	if len(plugins) > 0 && !pluginListed(plugins, "Arc4") {
+		return "", nil, nil, fmt.Errorf("no supported wire crypt plugin offered by server (offered: %v)", plugins)
+	}
+
 	rc, err := newArc4Cipher(sessionKey)
 	if err != nil {
 		return "", nil, nil, fmt.Errorf("failed to create cipher: %w", err)
@@ -384,19 +420,29 @@ func selectCipher(serverKeys []byte, sessionKey []byte) (string, streamCipher, s
 	return "Arc4", rc, wc, nil
 }
 
-// extractChaChaData attempts to extract a ChaCha nonce from server keys buffer.
-// Server keys format: repeated [type_tag(1)][key_tag(1)][len(2 LE)][data]
-func extractChaChaData(keys []byte) []byte {
-	pos := 0
-	for pos < len(keys) {
-		if pos+4 > len(keys) {
-			break
+func pluginListed(plugins []string, name string) bool {
+	for _, p := range plugins {
+		if p == name {
+			return true
 		}
-		typeTag := keys[pos]
-		pos++
-		_ = keys[pos] // key tag
-		pos++
-		length := int(keys[pos]) | int(keys[pos+1])<<8
+	}
+	return false
+}
+
+// parseServerKeys parses the p_acpt_keys buffer: an untagged clumplet
+// sequence of [tag(1)][len(1)][data(len)] entries (see jaybird
+// WireConnection.addServerKeys):
+//
+//	TAG_KEY_TYPE       (0): key type name, e.g. "Symmetric"
+//	TAG_KEY_PLUGINS    (1): space-separated plugin list, e.g. "ChaCha Arc4"
+//	TAG_PLUGIN_SPECIFIC(3): plugin name + NUL + data (ChaCha: IV of 12/16 bytes)
+//
+// Returns the offered plugin names and the ChaCha IV if present.
+func parseServerKeys(keys []byte) (plugins []string, chachaIV []byte) {
+	pos := 0
+	for pos+2 <= len(keys) {
+		tag := keys[pos]
+		length := int(keys[pos+1])
 		pos += 2
 		if pos+length > len(keys) {
 			break
@@ -404,36 +450,22 @@ func extractChaChaData(keys []byte) []byte {
 		data := keys[pos : pos+length]
 		pos += length
 
-		// Type 0 = "Symmetric", look for "ChaCha" name + nonce
-		if typeTag == 0 {
-			// Parse inner structure: plugin_name + specific_data
-			inner := data
-			ipos := 0
-			for ipos < len(inner) {
-				if ipos+3 > len(inner) {
-					break
-				}
-				itag := inner[ipos]
-				ipos++
-				ilen := int(inner[ipos]) | int(inner[ipos+1])<<8
-				ipos += 2
-				if ipos+ilen > len(inner) {
-					break
-				}
-				idata := inner[ipos : ipos+ilen]
-				ipos += ilen
-
-				if itag == 0 && string(idata) == "ChaCha" {
-					// Next item should be the nonce
-					continue
-				}
-				if itag == 5 && len(idata) >= 12 {
-					return idata[:12]
+		switch tag {
+		case 1: // TAG_KEY_PLUGINS
+			for _, name := range strings.Fields(string(data)) {
+				plugins = append(plugins, name)
+			}
+		case 3: // TAG_PLUGIN_SPECIFIC: plugin name + NUL + data
+			if sep := bytes.IndexByte(data, 0); sep > 0 {
+				name := string(data[:sep])
+				specific := data[sep+1:]
+				if name == "ChaCha" && (len(specific) == 12 || len(specific) == 16) {
+					chachaIV = append([]byte(nil), specific...)
 				}
 			}
 		}
 	}
-	return nil
+	return plugins, chachaIV
 }
 
 // buildConnectDPB builds the DPB for op_attach.

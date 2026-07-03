@@ -1,6 +1,9 @@
 package wire
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // StatusVector represents a parsed Firebird status vector containing
 // errors and warnings from a server response.
@@ -35,12 +38,36 @@ func (sv *StatusVector) HasWarning() bool {
 	return len(sv.Warnings) > 0
 }
 
-// Error returns the first error as a string, or empty if no errors.
+// Error returns a human-readable representation of the full error chain.
+// Firebird reports errors as a chain of GDS entries where the first code
+// is often generic (e.g. 335544351 "unsuccessful metadata update") and the
+// details (object names, SQLCODE) arrive as params of later entries, so
+// printing only the first entry loses the useful information.
 func (sv *StatusVector) Error() string {
 	if !sv.HasError() {
 		return ""
 	}
-	return sv.Errors[0].Error()
+	var b strings.Builder
+	for i := range sv.Errors {
+		e := &sv.Errors[i]
+		if i > 0 {
+			b.WriteString("; ")
+		}
+		fmt.Fprintf(&b, "GDS %d", e.Code)
+		if i == 0 && e.SQLState != "" {
+			fmt.Fprintf(&b, " (SQLSTATE %s)", e.SQLState)
+		}
+		if e.Message != "" {
+			b.WriteString(": ")
+			b.WriteString(e.Message)
+		}
+		for _, p := range e.Params {
+			if n, ok := p.(int32); ok {
+				fmt.Fprintf(&b, " [%d]", n)
+			}
+		}
+	}
+	return b.String()
 }
 
 // StatusError is returned whenever a server response carries a non-zero

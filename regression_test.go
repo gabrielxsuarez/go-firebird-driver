@@ -4,6 +4,7 @@ package firebird
 // Cada test reproduce un bug confirmado contra un servidor real.
 
 import (
+	"context"
 	"database/sql"
 	"strings"
 	"testing"
@@ -264,6 +265,46 @@ func TestRegressionQueryDMLAutocommit(t *testing.T) {
 	}
 	if txt != "chau" {
 		t.Fatalf("UPDATE vía Query no commiteado: txt=%q", txt)
+	}
+}
+
+// Bug: wire.Connect usaba net.Dial sin contexto ni deadline: el timeout de
+// conexión de database/sql no se respetaba (colgaba hasta el timeout del SO).
+func TestRegressionConnectContextTimeout(t *testing.T) {
+	db, err := sql.Open("firebird", "firebird://sysdba:masterkey@10.255.255.1:3050/none.fdb")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err = db.PingContext(ctx)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("ping a IP no ruteable: esperaba error")
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("el timeout del contexto (500ms) no se respetó: tardó %s", elapsed)
+	}
+}
+
+// wire_crypt=required debe funcionar contra un servidor con crypt disponible
+// (y fallar con error claro si la negociación no produce session key).
+func TestRegressionWireCryptRequired(t *testing.T) {
+	sep := "?"
+	if strings.Contains(testDSN, "?") {
+		sep = "&"
+	}
+	db, err := sql.Open("firebird", testDSN+sep+"wire_crypt=required")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	var one int
+	if err := db.QueryRow("SELECT 1 FROM rdb$database").Scan(&one); err != nil {
+		t.Fatalf("query con wire_crypt=required: %v", err)
 	}
 }
 
