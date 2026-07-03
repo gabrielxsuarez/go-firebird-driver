@@ -5,6 +5,7 @@ package firebird
 
 import (
 	"context"
+	"fmt"
 	"database/sql"
 	"strings"
 	"testing"
@@ -305,6 +306,112 @@ func TestRegressionWireCryptRequired(t *testing.T) {
 	var one int
 	if err := db.QueryRow("SELECT 1 FROM rdb$database").Scan(&one); err != nil {
 		t.Fatalf("query con wire_crypt=required: %v", err)
+	}
+}
+
+// Decisión pre-1.0: el dialecto de cliente 1 no está soportado (prepare usa
+// dialecto 3 siempre); aceptarlo en el DSN y usar otro en silencio era peor
+// que rechazarlo. Las BASES dialecto 1 funcionan con cliente dialecto 3.
+func TestRegressionDialect1Rejected(t *testing.T) {
+	for _, d := range []string{"1", "2"} {
+		_, err := ParseDSN("user:pass@localhost/db.fdb?dialect=" + d)
+		if err == nil {
+			t.Errorf("dialect=%s: esperaba error, fue aceptado", d)
+		} else if !strings.Contains(err.Error(), "dialect") {
+			t.Errorf("dialect=%s: el error debería mencionar el dialecto: %v", d, err)
+		}
+	}
+	if _, err := ParseDSN("user:pass@localhost/db.fdb?dialect=3"); err != nil {
+		t.Errorf("dialect=3 debería aceptarse: %v", err)
+	}
+}
+
+// Bug: el describe del prepare usaba un buffer fijo de 64KB sin detectar
+// isc_info_truncated: statements muy anchos devolvían metadata parcial y
+// fallaban de forma confusa. Ahora se sigue la continuación con
+// isc_info_sql_sqlda_start hasta completar (como jaybird).
+func TestRegressionDescribeTruncation(t *testing.T) {
+	db := openTestDB(t)
+
+	const numCols = 800
+	colName := func(i int) string {
+		return fmt.Sprintf("COL_ABCDEFGHIJKLMNOPQRS_%04d", i)
+	}
+	var ddl strings.Builder
+	ddl.WriteString("RECREATE TABLE regr_wide (")
+	for i := 0; i < numCols; i++ {
+		if i > 0 {
+			ddl.WriteString(", ")
+		}
+		ddl.WriteString(colName(i))
+		ddl.WriteString(" SMALLINT")
+	}
+	ddl.WriteString(")")
+	mustExec(t, db, ddl.String())
+
+	// Camino QueryContext (PrepareInfoItems: nombres+alias → describe más grande)
+	rows, err := db.Query("SELECT * FROM regr_wide")
+	if err != nil {
+		t.Fatalf("select ancho: %v", err)
+	}
+	cols, err := rows.Columns()
+	rows.Close()
+	if err != nil {
+		t.Fatalf("columns: %v", err)
+	}
+	if len(cols) != numCols {
+		t.Fatalf("describe truncado: %d columnas, esperaba %d", len(cols), numCols)
+	}
+	for i, c := range cols {
+		if c != colName(i) {
+			t.Fatalf("columna %d: %q, esperaba %q (descriptores desalineados tras continuación)", i, c, colName(i))
+		}
+	}
+
+	// Camino PrepareContext
+	stmt, err := db.Prepare("SELECT * FROM regr_wide")
+	if err != nil {
+		t.Fatalf("prepare ancho: %v", err)
+	}
+	stmt.Close()
+
+	// Camino ExecContext con la sección BIND truncada (800 parámetros)
+	var ins strings.Builder
+	ins.WriteString("INSERT INTO regr_wide VALUES (")
+	args := make([]any, numCols)
+	for i := 0; i < numCols; i++ {
+		if i > 0 {
+			ins.WriteString(",")
+		}
+		ins.WriteString("?")
+		args[i] = i % 100
+	}
+	ins.WriteString(")")
+	mustExec(t, db, ins.String(), args...)
+
+	var v0, v799 int
+	if err := db.QueryRow(fmt.Sprintf("SELECT %s, %s FROM regr_wide", colName(0), colName(numCols-1))).Scan(&v0, &v799); err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+	if v0 != 0 || v799 != (numCols-1)%100 {
+		t.Fatalf("valores mal bindeados tras continuación: col0=%d col799=%d", v0, v799)
+	}
+	mustExec(t, db, "DROP TABLE regr_wide")
+}
+
+// Mejora pre-1.0: los errores del servidor incluyen el texto humano de la
+// tabla de mensajes embebida (antes: "GDS 335544351: " sin texto).
+func TestRegressionErrorMessageText(t *testing.T) {
+	db := openTestDB(t)
+	_, err := db.Exec("DROP TABLE tabla_que_no_existe_xyz")
+	if err == nil {
+		t.Fatal("esperaba error")
+	}
+	msg := err.Error()
+	for _, want := range []string{"unsuccessful metadata update", "TABLA_QUE_NO_EXISTE_XYZ", "does not exist", "GDS 335544351"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("el error debería contener %q: %s", want, msg)
+		}
 	}
 }
 

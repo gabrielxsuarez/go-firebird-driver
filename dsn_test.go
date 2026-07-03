@@ -58,7 +58,7 @@ func TestParseDSNDatabasePathCompatibility(t *testing.T) {
 }
 
 func TestParseDSNDefaultsAndParams(t *testing.T) {
-	cfg, err := ParseDSN("user:password@localhost/dbname?charset=WIN1251&dialect=1&role=ADMIN&wire_crypt=disabled&fetch_size=500&data_type_bind=TIME+ZONE+TO+EXTENDED&session_time_zone=America%2FNew_York")
+	cfg, err := ParseDSN("user:password@localhost/dbname?charset=WIN1251&dialect=3&role=ADMIN&wire_crypt=disabled&fetch_size=500&data_type_bind=TIME+ZONE+TO+EXTENDED&session_time_zone=America%2FNew_York")
 	if err != nil {
 		t.Fatalf("ParseDSN() error = %v", err)
 	}
@@ -75,8 +75,8 @@ func TestParseDSNDefaultsAndParams(t *testing.T) {
 	if cfg.Charset != "WIN1251" {
 		t.Fatalf("Charset = %q, want WIN1251", cfg.Charset)
 	}
-	if cfg.Dialect != 1 {
-		t.Fatalf("Dialect = %d, want 1", cfg.Dialect)
+	if cfg.Dialect != 3 {
+		t.Fatalf("Dialect = %d, want 3", cfg.Dialect)
 	}
 	if cfg.Role != "ADMIN" {
 		t.Fatalf("Role = %q, want ADMIN", cfg.Role)

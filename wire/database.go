@@ -1182,3 +1182,27 @@ func fetchServerError(wc *WireConnection) error {
 	}
 	return fmt.Errorf("op_fetch: server returned op_response without error status")
 }
+
+// CompleteSQLDescribe parses statement describe data from a prepare (or
+// op_info_sql) response and, if the buffer was truncated, keeps requesting
+// continuations with isc_info_sql_sqlda_start until every output column and
+// input parameter descriptor has been received. items must be the same info
+// item list used for the original request.
+func (wc *WireConnection) CompleteSQLDescribe(stmtHandle int32, buf []byte, items []byte, bufferLength int32) (int32, []ColumnDescriptor, []ColumnDescriptor, error) {
+	var st describeState
+	truncated := parseSQLDescribeChunk(buf, &st)
+	for truncated {
+		prevDone := st.doneOutputs + st.doneInputs
+		contItems := itemsWithSqldaStart(items, st.doneOutputs+1, st.doneInputs+1)
+		data, err := wc.InfoSQL(stmtHandle, contItems, bufferLength)
+		if err != nil {
+			return 0, nil, nil, fmt.Errorf("describe continuation: %w", err)
+		}
+		truncated = parseSQLDescribeChunk(data, &st)
+		if truncated && st.doneOutputs+st.doneInputs == prevDone {
+			return 0, nil, nil, fmt.Errorf("describe continuation made no progress (outputs %d/%d, inputs %d/%d)",
+				st.doneOutputs, st.numOutputs, st.doneInputs, st.numInputs)
+		}
+	}
+	return st.stmtType, st.outputs, st.inputs, nil
+}

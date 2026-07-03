@@ -27,7 +27,7 @@ Supported parameters:
 | Parameter | Default | Notes |
 | --- | --- | --- |
 | `charset` | `UTF8` | Known aliases are canonicalized, unknown names are passed through. |
-| `dialect` | `3` | Firebird SQL dialect. |
+| `dialect` | `3` | Client SQL dialect. Only `3` is accepted; `dialect=1`/`2` return an explicit error. Dialect-1 *databases* work fine with client dialect 3. |
 | `role` | empty | SQL role name. |
 | `wire_crypt` | `enabled` | Accepts `enabled`, `disabled`, `required`, `true`, `false`, `1`, `0`. |
 | `fetch_size` | `200` | Number of rows requested per fetch. |
@@ -56,6 +56,20 @@ Compatibility guidance:
 Known limitation:
 
 - `BLOB SUB_TYPE TEXT` parameters are encoded with the connection charset. This matches the practical behavior used by the current implementation, but it is not a per-column charset-aware BPB implementation.
+
+## Errors
+
+- Server errors are `*wire.StatusError` (inspect with `errors.As`); `GDSCode()` returns the
+  primary GDS code and the full status vector is available in `SV`.
+- Error strings render the complete GDS chain with the embedded Firebird message templates
+  (e.g. `unsuccessful metadata update; DROP TABLE X failed; ... (GDS 335544351)`).
+  The template table lives in `internal/errmsg` (generated from the Firebird source tree,
+  message texts under IDPL; regenerate with `go generate ./internal/errmsg`).
+
+## Wire encryption
+
+- `wire_crypt=enabled` (default) negotiates ChaCha20 against Firebird 4/5 and Arc4 against
+  Firebird 3. `required` fails fast if no session key/cipher can be negotiated.
 
 ## Type Behavior
 

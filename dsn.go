@@ -86,6 +86,14 @@ func ParseDSN(dsn string) (*Config, error) {
 			if err != nil {
 				return nil, fmt.Errorf("firebird: invalid dialect %q: %w", val, err)
 			}
+			// Solo se soporta el dialecto de cliente 3. Las bases dialecto 1
+			// funcionan correctamente con cliente en dialecto 3 (verificado
+			// contra bases reales); el dialecto de cliente 1 activaría
+			// semántica distinta de DATE/NUMERIC/comillas que este driver
+			// no implementa, y aceptarlo en silencio sería peor que fallar.
+			if d != uint64(wire.SQLDialectCurrent) {
+				return nil, fmt.Errorf("firebird: client dialect %d is not supported (only dialect 3); note: dialect-1 databases work with the default client dialect 3", d)
+			}
 			cfg.Dialect = uint32(d)
 		case "role":
 			cfg.Role = val

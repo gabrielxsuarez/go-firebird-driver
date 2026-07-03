@@ -40,6 +40,7 @@ const (
 	IscInfoSQLRelation     byte = 17
 	IscInfoSQLOwner        byte = 18
 	IscInfoSQLAlias        byte = 19
+	IscInfoSQLSqldaStart   byte = 20
 	IscInfoSQLStmtType     byte = 21
 
 	// SQL record count items
@@ -194,32 +195,64 @@ func ParseInfoBuffer(buf []byte) (items []InfoItem, truncated bool) {
 
 // ParseSQLDescribeInfo parses the info buffer from op_prepare_statement
 // and returns column descriptors for output columns and input parameters.
+// If the buffer was truncated (isc_info_truncated) the result is partial;
+// use WireConnection.CompleteSQLDescribe to follow continuations.
 func ParseSQLDescribeInfo(buf []byte) (stmtType int32, outputs []ColumnDescriptor, inputs []ColumnDescriptor) {
+	var st describeState
+	parseSQLDescribeChunk(buf, &st)
+	return st.stmtType, st.outputs, st.inputs
+}
+
+// describeState accumulates statement describe data across possibly
+// multiple info buffers (initial prepare response + truncation continuations).
+type describeState struct {
+	stmtType    int32
+	outputs     []ColumnDescriptor
+	inputs      []ColumnDescriptor
+	numOutputs  int // total declarado por el servidor (0 = desconocido)
+	numInputs   int
+	doneOutputs int // descriptores completos (isc_info_sql_describe_end vistos)
+	doneInputs  int
+}
+
+// parseSQLDescribeChunk parses one info buffer into st. Returns true when the
+// buffer ends in isc_info_truncated, meaning a continuation request is needed.
+// A descriptor cut mid-way by truncation is not counted as done: the
+// continuation re-requests it from scratch (mirrors jaybird's
+// StatementInfoProcessor).
+func parseSQLDescribeChunk(buf []byte, st *describeState) (truncated bool) {
 	pos := 0
 	var currentList *[]ColumnDescriptor
+	var totalVars *int
+	var doneVars *int
 	var current *ColumnDescriptor
-	var numVars int
 
 	for pos < len(buf) {
 		tag := buf[pos]
 		pos++
 
-		if tag == IscInfoEnd || tag == IscInfoTruncated {
-			break
+		if tag == IscInfoEnd {
+			return false
+		}
+		if tag == IscInfoTruncated {
+			return true
 		}
 
 		// Section markers don't have length
 		if tag == IscInfoSQLSelect {
-			currentList = &outputs
+			currentList, totalVars, doneVars = &st.outputs, &st.numOutputs, &st.doneOutputs
 			current = nil
 			continue
 		}
 		if tag == IscInfoSQLBind {
-			currentList = &inputs
+			currentList, totalVars, doneVars = &st.inputs, &st.numInputs, &st.doneInputs
 			current = nil
 			continue
 		}
 		if tag == IscInfoSQLDescribeEnd {
+			if current != nil && doneVars != nil {
+				*doneVars++
+			}
 			current = nil
 			continue
 		}
@@ -238,19 +271,24 @@ func ParseSQLDescribeInfo(buf []byte) (stmtType int32, outputs []ColumnDescripto
 
 		switch tag {
 		case IscInfoSQLStmtType:
-			stmtType = readInfoInt32LE(data)
+			st.stmtType = readInfoInt32LE(data)
 
-		case IscInfoSQLNumVariables:
-			numVars = describeCount(readInfoInt32LE(data))
-			if currentList != nil && numVars > 0 && cap(*currentList) < numVars {
-				*currentList = make([]ColumnDescriptor, 0, numVars)
+		case IscInfoSQLNumVariables, IscInfoSQLDescribeVars:
+			n := describeCount(readInfoInt32LE(data))
+			if totalVars != nil {
+				*totalVars = n
+				if currentList != nil && n > 0 && cap(*currentList) < n {
+					grown := make([]ColumnDescriptor, len(*currentList), n)
+					copy(grown, *currentList)
+					*currentList = grown
+				}
 			}
 
 		case IscInfoSQLSQLDASeq:
 			if currentList != nil {
 				seq := describeCount(readInfoInt32LE(data))
 				if seq > 0 {
-					if numVars > 0 && seq > numVars {
+					if totalVars != nil && *totalVars > 0 && seq > *totalVars {
 						current = nil
 						continue
 					}
@@ -301,7 +339,26 @@ func ParseSQLDescribeInfo(buf []byte) (stmtType int32, outputs []ColumnDescripto
 			}
 		}
 	}
-	return stmtType, outputs, inputs
+	return false
+}
+
+// itemsWithSqldaStart rebuilds an info item list inserting an
+// isc_info_sql_sqlda_start (with the 1-based index of the first unprocessed
+// descriptor of the corresponding section) before each select/bind item,
+// so the server resumes the describe where the previous buffer was cut.
+func itemsWithSqldaStart(items []byte, nextOutput, nextInput int) []byte {
+	out := make([]byte, 0, len(items)+8)
+	for _, it := range items {
+		if it == IscInfoSQLSelect || it == IscInfoSQLBind {
+			idx := nextOutput
+			if it == IscInfoSQLBind {
+				idx = nextInput
+			}
+			out = append(out, IscInfoSQLSqldaStart, 2, byte(idx&0xFF), byte(idx>>8))
+		}
+		out = append(out, it)
+	}
+	return out
 }
 
 func describeCount(v int32) int {

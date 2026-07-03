@@ -44,7 +44,19 @@ Verificación post-fix:
 - `time.Time` de columnas DATE/TIMESTAMP sin zona: nuestro driver devuelve Location=UTC,
   nakagami devuelve Location=Local. Misma hora de pared. → documentar en guía de migración.
 
-## Decisiones pendientes (requieren al usuario)
+## Decisiones resueltas (2026-07-03, con el usuario)
+
+1. **Tabla de mensajes de error → embebida** (`internal/errmsg`, 2969 mensajes generados de
+   los headers `src/include/firebird/impl/msg/*.h` de Firebird master con `go generate`;
+   textos bajo IDPL, ~208KB de fuente). Los errores ahora muestran la cadena completa
+   renderizada: `unsuccessful metadata update; DROP TABLE X failed; ... (GDS 335544351)`.
+2. **Dialecto 1 → rechazado en el DSN** con error claro; documentado que las bases dialecto 1
+   funcionan con cliente dialecto 3 (verificado contra las 9 bases reales).
+3. **Describe truncation → implementada la continuación** con `isc_info_sql_sqlda_start`
+   (algoritmo de jaybird), en los tres caminos (Prepare/Exec/Query). Test con tabla de
+   800 columnas (describe ~150KB, múltiples continuaciones) incluyendo la sección BIND.
+
+## Decisiones pendientes (requieren al usuario) — HISTÓRICO (resueltas arriba)
 
 1. **Tabla de mensajes de error**: hoy los errores muestran códigos GDS + parámetros pero no el
    texto ("arithmetic exception..."). nakagami embebe una tabla generada de 2944 mensajes

@@ -198,8 +198,12 @@ func (c *conn) PrepareContext(ctx context.Context, query string) (driver.Stmt, e
 		return nil, c.handleRetryableErrorLocked(err)
 	}
 
-	// Parse descriptor info
-	stmtType, outputs, inputs := wire.ParseSQLDescribeInfo(infoData)
+	// Parse descriptor info, following truncation continuations for very wide statements
+	stmtType, outputs, inputs, err := c.wc.CompleteSQLDescribe(stmtHandle, infoData, wire.PrepareInfoItems(), 65535)
+	if err != nil {
+		_ = c.wc.RecycleStatement(stmtHandle, false)
+		return nil, c.handleFatalErrorLocked(err)
+	}
 
 	return &stmt{
 		conn:      c,
@@ -324,7 +328,11 @@ func (c *conn) ExecContext(ctx context.Context, query string, args []driver.Name
 		return nil, c.handleRetryableErrorLocked(err)
 	}
 
-	stmtType, _, inputs := wire.ParseSQLDescribeInfo(infoData)
+	stmtType, _, inputs, err := c.wc.CompleteSQLDescribe(stmtHandle, infoData, wire.PrepareExecInfoItems(), 65535)
+	if err != nil {
+		_ = c.wc.RecycleStatement(stmtHandle, false)
+		return nil, c.handleFatalErrorLocked(err)
+	}
 
 	if len(args) != len(inputs) {
 		_ = c.wc.RecycleStatement(stmtHandle, false)
@@ -444,7 +452,11 @@ func (c *conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 	// Use cached descriptors if available, otherwise parse and cache
 	stmtType, outputs, inputs, cached := c.descCacheLookup(query)
 	if !cached {
-		stmtType, outputs, inputs = wire.ParseSQLDescribeInfo(infoData)
+		stmtType, outputs, inputs, err = c.wc.CompleteSQLDescribe(stmtHandle, infoData, wire.PrepareInfoItems(), 65535)
+		if err != nil {
+			_ = c.wc.RecycleStatement(stmtHandle, false)
+			return nil, c.handleFatalErrorLocked(err)
+		}
 		c.descCacheStore(query, stmtType, outputs, inputs)
 	}
 

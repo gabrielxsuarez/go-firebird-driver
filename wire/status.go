@@ -3,6 +3,8 @@ package wire
 import (
 	"fmt"
 	"strings"
+
+	"github.com/gabrielxsuarez/go-firebird-driver/internal/errmsg"
 )
 
 // StatusVector represents a parsed Firebird status vector containing
@@ -22,10 +24,35 @@ type GDSError struct {
 
 // Error returns a human-readable representation of the GDS error.
 func (e *GDSError) Error() string {
+	var b strings.Builder
+	e.appendMessage(&b)
+	fmt.Fprintf(&b, " (GDS %d", e.Code)
 	if e.SQLState != "" {
-		return fmt.Sprintf("GDS %d (SQLSTATE %s): %s", e.Code, e.SQLState, e.Message)
+		fmt.Fprintf(&b, ", SQLSTATE %s", e.SQLState)
 	}
-	return fmt.Sprintf("GDS %d: %s", e.Code, e.Message)
+	b.WriteString(")")
+	return b.String()
+}
+
+// appendMessage writes the rendered message text for this entry: the client-side
+// Firebird template with @n placeholders substituted, falling back to the raw
+// code and arguments when the code is unknown.
+func (e *GDSError) appendMessage(b *strings.Builder) {
+	if msg := errmsg.Render(e.Code, e.Params); msg != "" {
+		b.WriteString(msg)
+		return
+	}
+	fmt.Fprintf(b, "GDS %d", e.Code)
+	if e.Message != "" {
+		b.WriteString(": ")
+		b.WriteString(e.Message)
+		return
+	}
+	for _, p := range e.Params {
+		if n, ok := p.(int32); ok {
+			fmt.Fprintf(b, " [%d]", n)
+		}
+	}
 }
 
 // HasError returns true if the status vector contains errors.
@@ -40,33 +67,27 @@ func (sv *StatusVector) HasWarning() bool {
 
 // Error returns a human-readable representation of the full error chain.
 // Firebird reports errors as a chain of GDS entries where the first code
-// is often generic (e.g. 335544351 "unsuccessful metadata update") and the
-// details (object names, SQLCODE) arrive as params of later entries, so
-// printing only the first entry loses the useful information.
+// is often generic (e.g. "unsuccessful metadata update") and the details
+// (object names, SQLCODE) arrive in later entries, so all entries are
+// rendered. The primary GDS code and SQLSTATE are appended for logs and
+// support; use errors.As with *StatusError for programmatic access.
 func (sv *StatusVector) Error() string {
 	if !sv.HasError() {
 		return ""
 	}
 	var b strings.Builder
 	for i := range sv.Errors {
-		e := &sv.Errors[i]
 		if i > 0 {
 			b.WriteString("; ")
 		}
-		fmt.Fprintf(&b, "GDS %d", e.Code)
-		if i == 0 && e.SQLState != "" {
-			fmt.Fprintf(&b, " (SQLSTATE %s)", e.SQLState)
-		}
-		if e.Message != "" {
-			b.WriteString(": ")
-			b.WriteString(e.Message)
-		}
-		for _, p := range e.Params {
-			if n, ok := p.(int32); ok {
-				fmt.Fprintf(&b, " [%d]", n)
-			}
-		}
+		sv.Errors[i].appendMessage(&b)
 	}
+	primary := &sv.Errors[0]
+	fmt.Fprintf(&b, " (GDS %d", primary.Code)
+	if primary.SQLState != "" {
+		fmt.Fprintf(&b, ", SQLSTATE %s", primary.SQLState)
+	}
+	b.WriteString(")")
 	return b.String()
 }
 
