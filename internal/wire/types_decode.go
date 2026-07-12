@@ -97,6 +97,15 @@ func DecodeColumn(r *Reader, desc *ColumnDescriptor) any {
 			return out
 		}
 		result = trimRightSpaces(result)
+		if desc.SubType == fbcharset.IDNone {
+			// Charset NONE: texto sin juego de caracteres. Devolver los bytes
+			// crudos (como OCTETS, y como el fallback de nakagami) en vez de
+			// string(bytes): esta última produce un string UTF-8 inválido con
+			// bytes altos single-byte y corrompe al consumidor al iterar runes.
+			out := make([]byte, len(result))
+			copy(out, result)
+			return out
+		}
 		return fbcharset.Decode(desc.SubType, result)
 
 	case SQLVarying:
@@ -104,7 +113,8 @@ func DecodeColumn(r *Reader, desc *ColumnDescriptor) any {
 		if r.Err() != nil {
 			return ""
 		}
-		if desc.SubType == fbcharset.IDOctets {
+		if desc.SubType == fbcharset.IDOctets || desc.SubType == fbcharset.IDNone {
+			// NONE se trata como OCTETS: bytes crudos (ver nota en SQLText / D1).
 			out := make([]byte, len(data))
 			copy(out, data)
 			return out
