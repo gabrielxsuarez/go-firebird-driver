@@ -380,6 +380,13 @@ type ColumnDescriptor struct {
 	Scale        int32
 	Length       int32
 	Nullable     bool
+	// SubTypeFromNone indica que la columna es NONE en la base y que SubType
+	// fue reinterpretado por none_charset (ver applyNoneCharset). Decode y
+	// encode usan SubType, pero el BLR debe seguir pidiendo NONE: pedirla en
+	// otro charset haría transliterar al servidor, que aborta el fetch con
+	// "Malformed string" ante bytes que no son válidos en el charset pedido.
+	// El cero (false) mantiene el comportamiento de siempre: BLR = SubType.
+	SubTypeFromNone bool
 }
 
 // readInfoInt32LE reads a little-endian int32 from variable-length data.

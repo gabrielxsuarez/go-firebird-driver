@@ -19,7 +19,11 @@ type WireConnection struct {
 	dbHandle        int32
 	protocolVersion uint32
 	charset         string
-	lazySend        bool // true when ptype_lazy_send is negotiated
+	// noneCharsetID es el charset con el que se interpretan las columnas de
+	// texto declaradas NONE. Se resuelve una vez al conectar; IDNone (0) deja
+	// esas columnas como bytes crudos. Ver applyNoneCharset.
+	noneCharsetID int32
+	lazySend      bool // true when ptype_lazy_send is negotiated
 
 	// Lazy send: count of responses not yet consumed.
 	deferredCount int

@@ -13,12 +13,15 @@ import (
 
 // Config holds parsed DSN parameters.
 type Config struct {
-	Host            string
-	Port            string
-	Database        string
-	User            string
-	Password        string
-	Charset         string
+	Host     string
+	Port     string
+	Database string
+	User     string
+	Password string
+	Charset  string
+	// NoneCharset is the character set assumed for text columns declared
+	// CHARACTER SET NONE. Defaults to Charset when not set in the DSN.
+	NoneCharset     string
 	Dialect         uint32
 	Role            string
 	WireCrypt       uint32
@@ -88,6 +91,12 @@ func ParseDSN(dsn string) (*Config, error) {
 			} else {
 				cfg.Charset = val
 			}
+		case "none_charset":
+			if canonical, ok := fbcharset.CanonicalName(val); ok {
+				cfg.NoneCharset = canonical
+			} else {
+				cfg.NoneCharset = val
+			}
 		case "dialect":
 			d, err := strconv.ParseUint(val, 10, 32)
 			if err != nil {
@@ -123,6 +132,14 @@ func ParseDSN(dsn string) (*Config, error) {
 				cfg.FetchSize = n
 			}
 		}
+	}
+
+	// Sin none_charset explícito, las columnas NONE se interpretan con el
+	// charset de la conexión (como nakagami y como Jaybird, que redefine el
+	// encoding de NONE al de la conexión). Resuelto acá, después del bucle,
+	// para no depender del orden de los parámetros en el DSN.
+	if cfg.NoneCharset == "" {
+		cfg.NoneCharset = cfg.Charset
 	}
 
 	return cfg, nil

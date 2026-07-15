@@ -116,12 +116,45 @@ firebird://user:password@host:port/path/to/database.fdb?param=value
 Main parameters:
 
 - `charset` (`UTF8` by default)
+- `none_charset` (defaults to `charset`)
 - `dialect` (`3` by default)
 - `role`
 - `wire_crypt` (`enabled` by default)
 - `fetch_size` (`200` by default)
 - `data_type_bind` / `dataTypeBind` / `set_bind` for Firebird 4+ `isc_dpb_set_bind`
 - `session_time_zone` / `sessionTimeZone` / `timezone` for Firebird 4+ session time zone
+
+### `none_charset`
+
+Text columns declared `CHARACTER SET NONE` carry no character set, so the bytes
+alone do not say how to read them. `none_charset` is the character set used to
+decode those columns and to encode parameters bound to them. It defaults to
+`charset`, which matches nakagami's driver; Jaybird does the same by redefining
+the `NONE` encoding to the connection's charset.
+
+Reading a `NONE` column that holds `0xD1` (`Ñ` in Latin-1):
+
+```text
+?charset=UTF8                          → "\xD1"      (string, not valid UTF-8)
+?charset=ISO8859_1                     → "Ñ"
+?charset=NONE                          → []byte{0xD1}
+?charset=NONE&none_charset=ISO8859_1   → "Ñ"
+```
+
+Decoding as `UTF8` is a pass-through, so the first form hands back the bytes
+unchanged inside a `string`, which is not valid UTF-8 and degrades to `U+FFFD`
+if the consumer iterates runes. Point `none_charset` at the character set the
+data is really in to get a well-formed string.
+
+The last form is the Jaybird-style passthrough recommended for legacy databases
+with mixed character sets: `charset=NONE` keeps the server from transliterating
+(a lossy connection charset aborts the fetch with *Malformed string* on data it
+cannot represent), while `none_charset` decodes the `NONE` columns client-side.
+Columns that declare their own character set are unaffected, and `OCTETS` stays
+raw: it is binary by declaration, not text without a character set.
+
+Setting `none_charset=NONE` always yields raw `[]byte`, whatever the connection
+charset is.
 
 See [COMPATIBILITY.md](COMPATIBILITY.md) for the current compatibility contract, type behavior, charset behavior, and known limitations.
 

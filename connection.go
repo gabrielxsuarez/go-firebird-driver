@@ -125,6 +125,7 @@ func newConnection(ctx context.Context, cfg *Config) (*conn, error) {
 		User:            cfg.User,
 		Password:        cfg.Password,
 		Charset:         cfg.Charset,
+		NoneCharset:     cfg.NoneCharset,
 		Dialect:         cfg.Dialect,
 		WireCrypt:       cfg.WireCrypt,
 		WireCryptSet:    true,

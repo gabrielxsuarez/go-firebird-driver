@@ -9,6 +9,8 @@ import (
 	"os/user"
 	"strings"
 	"time"
+
+	fbcharset "github.com/gabrielxsuarez/go-firebird-driver/internal/charset"
 )
 
 // ProtocolConfig holds the parameters for the wire protocol handshake.
@@ -21,6 +23,9 @@ type ProtocolConfig struct {
 
 	// Charset for the connection. Default: "UTF8".
 	Charset string
+	// NoneCharset is the character set assumed for text columns declared
+	// CHARACTER SET NONE. Empty (or "NONE") keeps them as raw bytes.
+	NoneCharset string
 	// SQL dialect. Default: 3.
 	Dialect uint32
 	// Wire encryption preference. Default: WireCryptEnabled.
@@ -371,6 +376,7 @@ func ConnectContext(ctx context.Context, cfg *ProtocolConfig) (*WireConnection, 
 		dbHandle:        resp.Handle,
 		protocolVersion: protocolVersion,
 		charset:         cfg.Charset,
+		noneCharsetID:   fbcharset.CharsetID(cfg.NoneCharset),
 		lazySend:        lazySend,
 	}
 

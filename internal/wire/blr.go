@@ -1,5 +1,16 @@
 package wire
 
+// wireCharset devuelve el charset que se le pide al servidor para una columna
+// de texto. Es el de la columna, salvo que none_charset haya reinterpretado una
+// columna NONE: ahí el cable sigue siendo NONE (bytes crudos, sin
+// transliteración) y la reinterpretación queda del lado del cliente.
+func wireCharset(desc *ColumnDescriptor) int32 {
+	if desc.SubTypeFromNone {
+		return 0 // CS_NONE
+	}
+	return desc.SubType & 0xFF
+}
+
 // AppendBLR appends the BLR for the given column descriptors to dst and
 // returns the extended buffer.
 func AppendBLR(dst []byte, descs []ColumnDescriptor) []byte {
@@ -75,14 +86,14 @@ func appendBLRType(buf []byte, desc *ColumnDescriptor) []byte {
 
 	case SQLText:
 		// blr_text2: [15][charset_lo][charset_hi][len_lo][len_hi]
-		charset := desc.SubType & 0xFF
+		charset := wireCharset(desc)
 		buf = append(buf, BlrText2,
 			byte(charset), byte(charset>>8),
 			byte(desc.Length), byte(desc.Length>>8))
 
 	case SQLVarying:
 		// blr_varying2: [38][charset_lo][charset_hi][len_lo][len_hi]
-		charset := desc.SubType & 0xFF
+		charset := wireCharset(desc)
 		buf = append(buf, BlrVarying2,
 			byte(charset), byte(charset>>8),
 			byte(desc.Length), byte(desc.Length>>8))

@@ -393,3 +393,93 @@ func sqlOpenTestDBWithParam(key, value string) (*sql.DB, error) {
 	}
 	return db, nil
 }
+
+// TestNoneCharsetParam cubre el parámetro DSN none_charset: el charset con el
+// que se interpretan las columnas declaradas CHARACTER SET NONE. La columna
+// guarda 0xD1 (Ñ en Latin-1), que no es UTF-8 válido: es justo el byte que
+// distingue una interpretación de otra.
+func TestNoneCharsetParam(t *testing.T) {
+	db := openTestDB(t)
+	db.Exec("DROP TABLE TEST_NONE_CS")
+	_, err := db.Exec(`
+		CREATE TABLE TEST_NONE_CS (
+			ID INTEGER NOT NULL PRIMARY KEY,
+			V VARCHAR(32) CHARACTER SET NONE
+		)`)
+	if err != nil {
+		t.Fatalf("CREATE: %v", err)
+	}
+	defer db.Exec("DROP TABLE TEST_NONE_CS")
+
+	// Bytes crudos Latin-1: "AÑO".
+	raw := []byte{0x41, 0xD1, 0x4F}
+	if _, err := db.Exec("INSERT INTO TEST_NONE_CS VALUES (?, ?)", 1, raw); err != nil {
+		t.Fatalf("INSERT: %v", err)
+	}
+
+	t.Run("explicito decodifica con ese charset", func(t *testing.T) {
+		db, err := sqlOpenTestDBWithParam("none_charset", "ISO8859_1")
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		defer db.Close()
+
+		var got string
+		if err := db.QueryRow("SELECT V FROM TEST_NONE_CS WHERE ID=1").Scan(&got); err != nil {
+			t.Fatalf("SELECT: %v", err)
+		}
+		if got != "AÑO" {
+			t.Fatalf("V = %q, want %q", got, "AÑO")
+		}
+		if !utf8.ValidString(got) {
+			t.Fatalf("V = % x, no es UTF-8 válido", got)
+		}
+	})
+
+	t.Run("explicito codifica los parametros con ese charset", func(t *testing.T) {
+		db, err := sqlOpenTestDBWithParam("none_charset", "ISO8859_1")
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		defer db.Close()
+
+		// El string UTF-8 de Go tiene que viajar como Latin-1 para matchear los
+		// bytes guardados: si no, lectura y escritura serían asimétricas.
+		var n int
+		if err := db.QueryRow("SELECT count(*) FROM TEST_NONE_CS WHERE V = ?", "AÑO").Scan(&n); err != nil {
+			t.Fatalf("SELECT: %v", err)
+		}
+		if n != 1 {
+			t.Fatalf("filas = %d, want 1 (el parámetro no se codificó con none_charset)", n)
+		}
+	})
+
+	t.Run("NONE explicito devuelve bytes crudos", func(t *testing.T) {
+		db, err := sqlOpenTestDBWithParam("none_charset", "NONE")
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		defer db.Close()
+
+		var got []byte
+		if err := db.QueryRow("SELECT V FROM TEST_NONE_CS WHERE ID=1").Scan(&got); err != nil {
+			t.Fatalf("SELECT: %v", err)
+		}
+		if !bytes.Equal(got, raw) {
+			t.Fatalf("V = % x, want % x", got, raw)
+		}
+	})
+
+	t.Run("default: sin el parametro no translitera ni aborta", func(t *testing.T) {
+		// Conexión UTF8 (default) sobre bytes que no son UTF-8 válido: el
+		// servidor no debe transliterar (el BLR sigue pidiendo NONE), así que
+		// el fetch no aborta y los bytes llegan crudos, como en nakagami.
+		var got []byte
+		if err := db.QueryRow("SELECT V FROM TEST_NONE_CS WHERE ID=1").Scan(&got); err != nil {
+			t.Fatalf("SELECT: %v", err)
+		}
+		if !bytes.Equal(got, raw) {
+			t.Fatalf("V = % x, want % x", got, raw)
+		}
+	})
+}

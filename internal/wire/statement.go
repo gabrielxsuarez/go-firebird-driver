@@ -2,7 +2,11 @@
 
 package wire
 
-import "fmt"
+import (
+	"fmt"
+
+	fbcharset "github.com/gabrielxsuarez/go-firebird-driver/internal/charset"
+)
 
 // PrepareStatementWithItems sends op_prepare_statement using a caller-provided
 // info item set. This allows lighter describe requests for exec-only paths.
@@ -172,5 +176,37 @@ func (wc *WireConnection) CompleteSQLDescribe(stmtHandle int32, buf []byte, item
 				st.doneOutputs, st.numOutputs, st.doneInputs, st.numInputs)
 		}
 	}
+	wc.applyNoneCharset(st.outputs)
+	wc.applyNoneCharset(st.inputs)
 	return st.stmtType, st.outputs, st.inputs, nil
+}
+
+// applyNoneCharset reinterpreta las columnas de texto declaradas NONE con el
+// charset de none_charset (por defecto, el de la conexión). Se aplica una vez
+// por describe, sobre los descriptores que después reusa cada fila: como el
+// decode (types_decode.go) y el encode de parámetros (types_encode.go) ya
+// deciden por desc.SubType, reescribirlo acá alcanza para que lectura y
+// escritura queden simétricas, sin tocar ningún camino por fila.
+//
+// El cable no cambia: SubTypeFromNone deja que el BLR siga pidiendo NONE, así
+// el servidor manda los bytes crudos y la reinterpretación es toda local (el
+// modelo de Jaybird: charset de conexión y charset de decode son cosas
+// distintas). Pedirle al servidor otro charset lo haría transliterar y abortar
+// el fetch ante bytes no representables.
+//
+// Solo toca SQLText/SQLVarying: en los BLOB, SubType es el subtipo del blob
+// (0 = binario), no un charset, y colisionaría con IDNone. OCTETS queda como
+// está: es binario por declaración explícita, no texto sin charset.
+func (wc *WireConnection) applyNoneCharset(descs []ColumnDescriptor) {
+	if wc.noneCharsetID == fbcharset.IDNone {
+		return
+	}
+	for i := range descs {
+		d := &descs[i]
+		sqlType := d.SQLType & ^int32(1) // sin el flag de nullable, como el resto del driver
+		if d.SubType == fbcharset.IDNone && (sqlType == SQLText || sqlType == SQLVarying) {
+			d.SubType = wc.noneCharsetID
+			d.SubTypeFromNone = true
+		}
+	}
 }
