@@ -23,6 +23,7 @@ Eso es todo para la mayoría de las aplicaciones: este driver **también registr
 | Parámetro nakagami | Acá | Nota |
 | --- | --- | --- |
 | `charset` | ✅ igual | default UTF8 en ambos |
+| — | `none_charset` | no existe en nakagami. Es el charset con el que se leen las columnas `CHARACTER SET NONE`; por defecto vale lo mismo que `charset`, que es justo lo que hace nakagami. Sin tocarlo, la conducta es la misma. |
 | `role` | ✅ igual | |
 | `timezone` | ✅ igual | alias de `session_time_zone` |
 | `wire_crypt=true/false` | ✅ igual | además acepta `enabled/disabled/required` |

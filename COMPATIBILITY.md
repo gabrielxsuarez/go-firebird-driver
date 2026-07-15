@@ -27,6 +27,7 @@ Supported parameters:
 | Parameter | Default | Notes |
 | --- | --- | --- |
 | `charset` | `UTF8` | Known aliases are canonicalized, unknown names are passed through. |
+| `none_charset` | value of `charset` | Character set used to decode text columns declared `CHARACTER SET NONE`, and to encode parameters bound to them. `NONE` yields raw `[]byte`. See *Charset Behavior*. |
 | `dialect` | `3` | Client SQL dialect. Only `3` is accepted; `dialect=1`/`2` return an explicit error. Dialect-1 *databases* work fine with client dialect 3. |
 | `role` | empty | SQL role name. |
 | `wire_crypt` | `enabled` | Accepts `enabled`, `disabled`, `required`, `true`, `false`, `1`, `0`. |
@@ -43,7 +44,7 @@ Compatibility guidance:
 
 | Charset group | Status |
 | --- | --- |
-| `NONE` | Passthrough bytes. Strings written as UTF-8 read back as strings; arbitrary bytes should be scanned as `[]byte`. |
+| `NONE` | Decoded with `none_charset`, which defaults to the connection charset. Raw `[]byte` when that resolves to `NONE`. See below. |
 | `OCTETS` | Binary, exposed as `[]byte`. |
 | `ASCII` | Encodes only ASCII and decodes invalid bytes as replacement runes. |
 | `UTF8`, `UNICODE_FSS` | Passthrough UTF-8 strings. |
@@ -52,6 +53,36 @@ Compatibility guidance:
 | `WIN1250` through `WIN1258` | Backed by `golang.org/x/text/encoding/charmap`. |
 | `SJIS_0208`, `EUCJ_0208`, `KSC_5601`, `BIG_5`, `GBK`, `GB18030` | Backed by `golang.org/x/text` encoders. |
 | Legacy DOS/TIS620 mappings | Names are recognized, but unsupported transcoders currently fall back to passthrough. |
+
+### `CHARACTER SET NONE` columns
+
+A `NONE` column carries no character set, so the bytes alone do not say how to
+read them. `none_charset` supplies that character set, and defaults to the
+connection `charset` — matching nakagami, which decodes text with the
+connection charset, and Jaybird, which redefines the `NONE` encoding to the
+connection's charset.
+
+Reading a `NONE` column holding `0xD1` (`Ñ` in Latin-1):
+
+| DSN | Result |
+| --- | --- |
+| `?charset=UTF8` (default) | `"\xD1"` — `string`, not valid UTF-8 (decoding as UTF8 is a pass-through) |
+| `?charset=ISO8859_1` | `"Ñ"` |
+| `?charset=NONE` | `[]byte{0xD1}` |
+| `?charset=NONE&none_charset=ISO8859_1` | `"Ñ"` |
+
+The last form is recommended for legacy databases with mixed character sets:
+`charset=NONE` keeps the server from transliterating (a lossy connection
+charset aborts the fetch with *Malformed string* on data it cannot represent),
+while `none_charset` decodes client-side. The character set requested over the
+wire always stays `NONE` for these columns, so reinterpreting them never makes
+the server transliterate. Parameters bound to `NONE` columns are encoded with
+the same character set, so reads and writes stay symmetric.
+
+Columns that declare their own character set are unaffected, and `OCTETS` stays
+raw: it is binary by declaration, not text without a character set.
+`ColumnTypeLength` reports the length declared in the database (`NONE` is one
+byte per character), independent of `none_charset`.
 
 Known limitation:
 
@@ -92,6 +123,7 @@ Known limitation:
 | `DATE`, `TIME`, `TIMESTAMP` | Returned as `time.Time`. |
 | `TIME/TIMESTAMP WITH TIME ZONE` | Returned as `time.Time`; the driver preserves wall clock and offset. |
 | `CHAR/VARCHAR CHARACTER SET OCTETS` | Returned as `[]byte`. |
+| `CHAR/VARCHAR CHARACTER SET NONE` | Returned as string decoded with `none_charset` (defaults to the connection charset), or as `[]byte` when that resolves to `NONE`. |
 | `BLOB SUB_TYPE 0` | Materialized as `[]byte`. |
 | `BLOB SUB_TYPE TEXT` | Materialized as string using connection charset. |
 

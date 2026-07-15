@@ -461,25 +461,78 @@ func TestNoneCharsetParam(t *testing.T) {
 		}
 		defer db.Close()
 
-		var got []byte
-		if err := db.QueryRow("SELECT V FROM TEST_NONE_CS WHERE ID=1").Scan(&got); err != nil {
+		rows, err := db.Query("SELECT V FROM TEST_NONE_CS WHERE ID=1")
+		if err != nil {
 			t.Fatalf("SELECT: %v", err)
+		}
+		defer rows.Close()
+
+		// Sin charset con qué interpretarla, la columna se decodifica como
+		// bytes crudos: el ScanType tiene que decir lo mismo que el decode.
+		columnTypes, err := rows.ColumnTypes()
+		if err != nil {
+			t.Fatalf("ColumnTypes: %v", err)
+		}
+		if got, want := columnTypes[0].ScanType(), reflect.TypeOf([]byte{}); got != want {
+			t.Fatalf("ScanType = %v, want %v", got, want)
+		}
+
+		if !rows.Next() {
+			t.Fatal("se esperaba una fila")
+		}
+		var got []byte
+		if err := rows.Scan(&got); err != nil {
+			t.Fatalf("Scan: %v", err)
 		}
 		if !bytes.Equal(got, raw) {
 			t.Fatalf("V = % x, want % x", got, raw)
 		}
 	})
 
-	t.Run("default: sin el parametro no translitera ni aborta", func(t *testing.T) {
-		// Conexión UTF8 (default) sobre bytes que no son UTF-8 válido: el
-		// servidor no debe transliterar (el BLR sigue pidiendo NONE), así que
-		// el fetch no aborta y los bytes llegan crudos, como en nakagami.
-		var got []byte
+	t.Run("default: reinterpreta con el charset de la conexion", func(t *testing.T) {
+		// Conexión UTF8 (default): none_charset vale lo mismo, así que la
+		// columna se decodifica como UTF8. Decodificar UTF8 es pass-through, o
+		// sea que devuelve los bytes intactos dentro de un string (no es UTF-8
+		// válido, pero es la semántica de nakagami).
+		//
+		// Lo que se prueba acá es el TIPO NATIVO: escanear a []byte pasaría
+		// tanto con string como con []byte y no probaría nada.
+		var got any
 		if err := db.QueryRow("SELECT V FROM TEST_NONE_CS WHERE ID=1").Scan(&got); err != nil {
 			t.Fatalf("SELECT: %v", err)
 		}
-		if !bytes.Equal(got, raw) {
-			t.Fatalf("V = % x, want % x", got, raw)
+		s, ok := got.(string)
+		if !ok {
+			t.Fatalf("V = %T, want string (el default debe reinterpretar la columna con el charset de la conexión)", got)
+		}
+		// Y que el servidor no transliteró: el BLR sigue pidiendo NONE, así que
+		// el fetch no aborta con "Malformed string" y los bytes llegan crudos.
+		if !bytes.Equal([]byte(s), raw) {
+			t.Fatalf("V = % x, want % x", s, raw)
+		}
+	})
+
+	t.Run("ColumnTypeLength reporta el largo declarado, no el reinterpretado", func(t *testing.T) {
+		// V es VARCHAR(32) CHARACTER SET NONE. Con el default (UTF8),
+		// none_charset la reinterpreta, pero el largo declarado en la base no
+		// cambia: NONE es un byte por carácter, así que son 32 caracteres.
+		// Dividir por los bytes del charset reinterpretado daría 8.
+		rows, err := db.Query("SELECT V FROM TEST_NONE_CS WHERE ID=1")
+		if err != nil {
+			t.Fatalf("SELECT: %v", err)
+		}
+		defer rows.Close()
+
+		columnTypes, err := rows.ColumnTypes()
+		if err != nil {
+			t.Fatalf("ColumnTypes: %v", err)
+		}
+		got, ok := columnTypes[0].Length()
+		if !ok {
+			t.Fatal("Length() no reportó largo para VARCHAR")
+		}
+		if got != 32 {
+			t.Fatalf("Length = %d, want 32", got)
 		}
 	})
 }

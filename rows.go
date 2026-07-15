@@ -345,7 +345,16 @@ func (r *rows) ColumnTypeLength(index int) (length int64, ok bool) {
 	sqlType := col.SQLType & ^int32(1) // strip nullable bit
 	switch sqlType {
 	case wire.SQLText, wire.SQLVarying:
-		return int64(col.Length) / int64(charsetMaxBytesPerChar(col.SubType&0xFF)), true
+		// Length is in bytes, sized by the charset the column is declared with
+		// in the database. If none_charset reinterpreted a NONE column, the
+		// declared charset is still NONE, which is one byte per character:
+		// dividing by the reinterpreted charset would shrink the length (a
+		// VARCHAR(32) NONE read with none_charset=UTF8 would report 8).
+		bytesPerChar := int32(1)
+		if !col.SubTypeFromNone {
+			bytesPerChar = charsetMaxBytesPerChar(col.SubType & 0xFF)
+		}
+		return int64(col.Length) / int64(bytesPerChar), true
 	case wire.SQLBlob:
 		return math.MaxInt64, true
 	default:
@@ -409,7 +418,10 @@ func (r *rows) ColumnTypeScanType(index int) reflect.Type {
 	sqlType := col.SQLType & ^int32(1) // strip nullable bit
 	switch sqlType {
 	case wire.SQLText, wire.SQLVarying:
-		if col.SubType == 1 {
+		// Mirrors DecodeColumn: OCTETS is binary, and a NONE column that
+		// none_charset left as NONE has no charset to decode with, so both
+		// come back as raw bytes.
+		if col.SubType == fbcharset.IDOctets || col.SubType == fbcharset.IDNone {
 			return reflect.TypeOf([]byte{})
 		}
 		return reflect.TypeOf("")

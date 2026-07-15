@@ -315,3 +315,46 @@ func TestAppendBLRReusesBuffer(t *testing.T) {
 		t.Errorf("AppendBLR allocated: cap went from 256 to %d", cap(result))
 	}
 }
+
+// TestBLRCharsetForNoneReinterpretedColumn fija la separación cable/local: si
+// none_charset reinterpretó una columna NONE, el BLR tiene que seguir pidiendo
+// NONE (charset 0). Pedirle otro charset al servidor lo haría transliterar y
+// abortar el fetch con "Malformed string" ante bytes que no puede representar.
+func TestBLRCharsetForNoneReinterpretedColumn(t *testing.T) {
+	const isoCharsetID = 21 // ISO8859_1
+
+	tests := []struct {
+		name        string
+		sqlType     int32
+		blrOpcode   byte
+		fromNone    bool
+		subType     int32
+		wantCharset byte
+	}{
+		{"varying reinterpretada pide NONE", SQLVarying, BlrVarying2, true, isoCharsetID, 0},
+		{"text reinterpretada pide NONE", SQLText, BlrText2, true, isoCharsetID, 0},
+		{"varying declarada pide su charset", SQLVarying, BlrVarying2, false, isoCharsetID, isoCharsetID},
+		{"text declarada pide su charset", SQLText, BlrText2, false, isoCharsetID, isoCharsetID},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			desc := ColumnDescriptor{
+				SQLType:         tt.sqlType | 1, // con el flag de nullable, como lo manda el servidor
+				SubType:         tt.subType,
+				SubTypeFromNone: tt.fromNone,
+				Length:          32,
+			}
+			got := appendBLRType(nil, &desc)
+			if len(got) != 5 {
+				t.Fatalf("BLR = % x, want 5 bytes", got)
+			}
+			if got[0] != tt.blrOpcode {
+				t.Fatalf("opcode = %#x, want %#x", got[0], tt.blrOpcode)
+			}
+			if got[1] != tt.wantCharset || got[2] != 0 {
+				t.Fatalf("charset = %d (% x), want %d", int(got[1])|int(got[2])<<8, got, tt.wantCharset)
+			}
+		})
+	}
+}

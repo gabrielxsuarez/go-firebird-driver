@@ -175,8 +175,10 @@ The four things most likely to surprise you:
   A 100 MB blob means 100 MB of memory; there is no streaming API in 1.0.
 - **`TIMESTAMP`/`TIME WITH TIME ZONE`** come back as `time.Time` preserving wall clock
   and offset; the original IANA zone *name* is not guaranteed to survive.
-- **`CHARACTER SET NONE`** is passthrough bytes: strings you write as UTF-8 read back
-  fine, but arbitrary legacy bytes should be scanned as `[]byte`.
+- **`CHARACTER SET NONE`** columns carry no character set, so they are decoded with
+  `none_charset`, which defaults to the connection charset. Point it at the character
+  set the data is really in (`?none_charset=ISO8859_1`), or set it to `NONE` to get raw
+  `[]byte`. See [`none_charset`](#none_charset) above.
 - **No `LastInsertId`**: Firebird has no such concept; use `INSERT ... RETURNING`:
 
   ```go
