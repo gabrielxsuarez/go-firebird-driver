@@ -536,3 +536,111 @@ func TestNoneCharsetParam(t *testing.T) {
 		}
 	})
 }
+
+// TestCollatedCharsetRoundTrip cubre D3: una columna con COLLATE lleva la
+// collation en el byte alto del ttype que reporta el describe. Decode/Encode
+// deben usar solo el byte bajo (el charset): sin la máscara, la columna
+// colacionada no matchea ningún charset conocido y cae al passthrough — la
+// lectura entrega bytes crudos dentro del string y el parámetro se escribe
+// como UTF-8 crudo en la base.
+//
+// El caso solo se dispara cuando el descriptor conserva el ttype original de
+// la columna (conexión ISO8859_1 o NONE); con conexión UTF8 el servidor
+// translitera y describe con el charset de la conexión, sin collation.
+func TestCollatedCharsetRoundTrip(t *testing.T) {
+	admin := openTestDB(t)
+	admin.Exec("DROP TABLE TEST_COLLATED")
+	_, err := admin.Exec(`
+		CREATE TABLE TEST_COLLATED (
+			ID INTEGER NOT NULL PRIMARY KEY,
+			V_VARCHAR VARCHAR(50) CHARACTER SET ISO8859_1 COLLATE ES_ES,
+			V_CHAR CHAR(12) CHARACTER SET ISO8859_1 COLLATE ES_ES
+		)`)
+	if err != nil {
+		t.Fatalf("CREATE: %v", err)
+	}
+	t.Cleanup(func() { admin.Exec("DROP TABLE TEST_COLLATED") })
+
+	const want = "Ñandú ácido"
+	const wantChar = "Ñá"
+	// los mismos textos en Latin-1, como deben quedar guardados
+	rawVarchar := []byte("\xd1and\xfa \xe1cido")
+	rawChar := []byte("\xd1\xe1")
+
+	iso, err := sqlOpenTestDBWithParam("charset", "ISO8859_1")
+	if err != nil {
+		t.Fatalf("open ISO8859_1: %v", err)
+	}
+	defer iso.Close()
+
+	t.Run("escritura: el parametro se encodea a Latin-1", func(t *testing.T) {
+		if _, err := iso.Exec("INSERT INTO TEST_COLLATED VALUES (?, ?, ?)", 1, want, wantChar); err != nil {
+			t.Fatalf("INSERT: %v", err)
+		}
+
+		// Bytes reales en la base: CAST a OCTETS (byte a byte en el server).
+		// Una conexión charset=NONE ya no sirve de testigo: con el fix también
+		// decodifica la columna por su charset, y escanear ese string a []byte
+		// devolvería el UTF-8 del valor decodificado, no lo guardado.
+		var gotVarchar, gotChar []byte
+		err := admin.QueryRow(`SELECT
+				CAST(V_VARCHAR AS VARCHAR(50) CHARACTER SET OCTETS),
+				CAST(V_CHAR AS CHAR(12) CHARACTER SET OCTETS)
+			FROM TEST_COLLATED WHERE ID=1`).Scan(&gotVarchar, &gotChar)
+		if err != nil {
+			t.Fatalf("SELECT crudo: %v", err)
+		}
+		if !bytes.Equal(gotVarchar, rawVarchar) {
+			t.Fatalf("V_VARCHAR en base = % x, want % x (Latin-1)", gotVarchar, rawVarchar)
+		}
+		// CHAR vía OCTETS: el padding puede llegar como espacios o como 0x00
+		if !bytes.Equal(bytes.TrimRight(gotChar, " \x00"), rawChar) {
+			t.Fatalf("V_CHAR en base = % x, want % x (Latin-1)", gotChar, rawChar)
+		}
+	})
+
+	t.Run("lectura: conexion ISO8859_1 decodifica", func(t *testing.T) {
+		var gotVarchar, gotChar string
+		if err := iso.QueryRow("SELECT V_VARCHAR, V_CHAR FROM TEST_COLLATED WHERE ID=1").Scan(&gotVarchar, &gotChar); err != nil {
+			t.Fatalf("SELECT: %v", err)
+		}
+		if !utf8.ValidString(gotVarchar) {
+			t.Fatalf("V_VARCHAR no es UTF-8 válido: % x", gotVarchar)
+		}
+		if gotVarchar != want {
+			t.Fatalf("V_VARCHAR = %q, want %q", gotVarchar, want)
+		}
+		if got := strings.TrimRight(gotChar, " "); got != wantChar {
+			t.Fatalf("V_CHAR = %q, want %q", got, wantChar)
+		}
+	})
+
+	t.Run("lectura: conexion NONE decodifica por charset de columna", func(t *testing.T) {
+		// lc_ctype=NONE no translitera y el descriptor conserva el ttype
+		// colacionado; el BLR pide el charset de la columna (byte bajo) y el
+		// decode tiene que usar ese mismo charset.
+		none, err := sqlOpenTestDBWithParam("charset", "NONE")
+		if err != nil {
+			t.Fatalf("open NONE: %v", err)
+		}
+		defer none.Close()
+
+		var got string
+		if err := none.QueryRow("SELECT V_VARCHAR FROM TEST_COLLATED WHERE ID=1").Scan(&got); err != nil {
+			t.Fatalf("SELECT: %v", err)
+		}
+		if got != want {
+			t.Fatalf("V_VARCHAR = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("lectura: conexion UTF8 sigue bien (server translitera)", func(t *testing.T) {
+		var got string
+		if err := admin.QueryRow("SELECT V_VARCHAR FROM TEST_COLLATED WHERE ID=1").Scan(&got); err != nil {
+			t.Fatalf("SELECT: %v", err)
+		}
+		if got != want {
+			t.Fatalf("V_VARCHAR = %q, want %q", got, want)
+		}
+	})
+}

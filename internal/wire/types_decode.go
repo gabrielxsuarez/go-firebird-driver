@@ -108,7 +108,7 @@ func DecodeColumn(r *Reader, desc *ColumnDescriptor) any {
 			copy(out, result)
 			return out
 		}
-		return fbcharset.Decode(desc.SubType, result)
+		return fbcharset.Decode(charsetID(desc), result)
 
 	case SQLVarying:
 		data := r.ReadBuffer()
@@ -122,7 +122,7 @@ func DecodeColumn(r *Reader, desc *ColumnDescriptor) any {
 			copy(out, data)
 			return out
 		}
-		return fbcharset.Decode(desc.SubType, data)
+		return fbcharset.Decode(charsetID(desc), data)
 
 	case SQLBlob:
 		blobID := r.ReadInt64()

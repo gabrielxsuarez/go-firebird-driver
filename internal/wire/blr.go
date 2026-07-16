@@ -8,6 +8,14 @@ func wireCharset(desc *ColumnDescriptor) int32 {
 	if desc.SubTypeFromNone {
 		return 0 // CS_NONE
 	}
+	return charsetID(desc)
+}
+
+// charsetID devuelve el charset efectivo de una columna de texto: el byte bajo
+// del ttype. El byte alto es la collation (COLLATE ES_ES, etc.) y no participa
+// del encoding; sin esta máscara una columna colacionada no matchea ningún
+// charset conocido y Decode/Encode caen al passthrough de bytes crudos (D3).
+func charsetID(desc *ColumnDescriptor) int32 {
 	return desc.SubType & 0xFF
 }
 

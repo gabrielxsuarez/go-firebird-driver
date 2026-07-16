@@ -152,7 +152,7 @@ func copyTextParam(dst []byte, desc *ColumnDescriptor, value any) error {
 	var raw []byte
 	switch v := value.(type) {
 	case string:
-		s, err := fbcharset.Encode(desc.SubType, v)
+		s, err := fbcharset.Encode(charsetID(desc), v)
 		if err != nil {
 			return err
 		}
@@ -160,7 +160,7 @@ func copyTextParam(dst []byte, desc *ColumnDescriptor, value any) error {
 	case []byte:
 		raw = v
 	default:
-		s, err := fbcharset.Encode(desc.SubType, toString(value))
+		s, err := fbcharset.Encode(charsetID(desc), toString(value))
 		if err != nil {
 			return err
 		}
@@ -175,7 +175,7 @@ func copyTextParam(dst []byte, desc *ColumnDescriptor, value any) error {
 		n = copy(dst, raw)
 	} else {
 		if len(data) > len(dst) {
-			return fmt.Errorf("text parameter too long for charset %s: encoded length %d exceeds field length %d", fbcharset.CharsetName(desc.SubType), len(data), len(dst))
+			return fmt.Errorf("text parameter too long for charset %s: encoded length %d exceeds field length %d", fbcharset.CharsetName(charsetID(desc)), len(data), len(dst))
 		}
 		n = copy(dst, data)
 	}
@@ -194,7 +194,7 @@ func varyingPaddingByte(desc *ColumnDescriptor) byte {
 
 func writeVaryingParam(w *Writer, desc *ColumnDescriptor, data []byte) error {
 	if len(data) > int(desc.Length) {
-		return fmt.Errorf("varying parameter too long for charset %s: encoded length %d exceeds field length %d", fbcharset.CharsetName(desc.SubType), len(data), desc.Length)
+		return fmt.Errorf("varying parameter too long for charset %s: encoded length %d exceeds field length %d", fbcharset.CharsetName(charsetID(desc)), len(data), desc.Length)
 	}
 	l := len(data)
 	pad := (4 - l) & 3
@@ -212,7 +212,7 @@ func writeVaryingParam(w *Writer, desc *ColumnDescriptor, data []byte) error {
 
 func writeVaryingParamStack(w *StackWriter, desc *ColumnDescriptor, data []byte) error {
 	if len(data) > int(desc.Length) {
-		return fmt.Errorf("varying parameter too long for charset %s: encoded length %d exceeds field length %d", fbcharset.CharsetName(desc.SubType), len(data), desc.Length)
+		return fmt.Errorf("varying parameter too long for charset %s: encoded length %d exceeds field length %d", fbcharset.CharsetName(charsetID(desc)), len(data), desc.Length)
 	}
 	l := len(data)
 	pad := (4 - l) & 3
@@ -324,7 +324,7 @@ func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) error {
 	case SQLVarying:
 		switch v := value.(type) {
 		case string:
-			s, err := fbcharset.Encode(desc.SubType, v)
+			s, err := fbcharset.Encode(charsetID(desc), v)
 			if err != nil {
 				return err
 			}
@@ -332,7 +332,7 @@ func encodeValueStack(w *StackWriter, desc *ColumnDescriptor, value any) error {
 		case []byte:
 			return writeVaryingParamStack(w, desc, v)
 		default:
-			s, err := fbcharset.Encode(desc.SubType, toString(value))
+			s, err := fbcharset.Encode(charsetID(desc), toString(value))
 			if err != nil {
 				return err
 			}
@@ -533,7 +533,7 @@ func encodeValue(w *Writer, desc *ColumnDescriptor, value any) error {
 	case SQLVarying:
 		switch v := value.(type) {
 		case string:
-			s, err := fbcharset.Encode(desc.SubType, v)
+			s, err := fbcharset.Encode(charsetID(desc), v)
 			if err != nil {
 				return err
 			}
@@ -541,7 +541,7 @@ func encodeValue(w *Writer, desc *ColumnDescriptor, value any) error {
 		case []byte:
 			return writeVaryingParam(w, desc, v)
 		default:
-			s, err := fbcharset.Encode(desc.SubType, toString(value))
+			s, err := fbcharset.Encode(charsetID(desc), toString(value))
 			if err != nil {
 				return err
 			}
