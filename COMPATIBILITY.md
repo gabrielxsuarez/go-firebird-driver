@@ -51,8 +51,10 @@ Compatibility guidance:
 | `ISO8859_1` | Fast path implemented without external encoder allocation. |
 | `ISO8859_2`, `ISO8859_3`, `ISO8859_4`, `ISO8859_5`, `ISO8859_6`, `ISO8859_7`, `ISO8859_8`, `ISO8859_9`, `ISO8859_13` | Backed by `golang.org/x/text/encoding/charmap` where available. |
 | `WIN1250` through `WIN1258` | Backed by `golang.org/x/text/encoding/charmap`. |
-| `SJIS_0208`, `EUCJ_0208`, `KSC_5601`, `BIG_5`, `GBK`, `GB18030` | Backed by `golang.org/x/text` encoders. |
-| Legacy DOS/TIS620 mappings | Names are recognized, but unsupported transcoders currently fall back to passthrough. |
+| `SJIS_0208`, `EUCJ_0208`, `KSC_5601`, `BIG_5`, `GB_2312`, `GBK`, `GB18030` | Backed by `golang.org/x/text` encoders (`GB_2312` uses the GBK superset). |
+| `DOS437`, `DOS850`, `DOS852`, `DOS858`, `DOS860`, `DOS862`, `DOS863`, `DOS865`, `DOS866` | Backed by `golang.org/x/text/encoding/charmap`. |
+| `TIS620` | Approximated by Windows-874 (a superset of TIS-620). |
+| `DOS737`, `DOS775`, `DOS857`, `DOS861`, `DOS864`, `DOS869`, `NEXT`, `CYRL`, `CP943C` | Names are recognized, but no transcoder is available; they fall back to passthrough. |
 
 ### `CHARACTER SET NONE` columns
 

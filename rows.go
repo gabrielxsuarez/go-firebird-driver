@@ -383,7 +383,7 @@ func charsetMaxBytesPerChar(charsetID int32) int32 {
 		return 3
 	case 4: // UTF8
 		return 4
-	case 5, 6, 44, 56, 57, 64: // SJIS_0208, EUCJ_0208, KSC_5601, BIG_5, GB_2312, GBK(64)
+	case 5, 6, 44, 56, 57, 67, 68: // SJIS_0208, EUCJ_0208, KSC_5601, BIG_5, GB_2312, GBK, CP943C
 		return 2
 	case 69: // GB18030
 		return 4

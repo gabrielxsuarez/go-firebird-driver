@@ -168,6 +168,17 @@ func TestSupportedTranscodersRepresentativeRoundTrip(t *testing.T) {
 		{"WIN1258", 65, "Tieng Viet"},
 		{"GBK", 67, "\u4e2d\u6587"},
 		{"GB18030", 69, "\u4e2d\u6587"},
+		{"GB_2312", 57, "\u4e2d\u6587"},
+		{"DOS437", 10, "Caf\u00e9 se\u00f1or"},
+		{"DOS850", 11, "\u00d1and\u00fa \u00e1cido"},
+		{"DOS852", 45, "Z\u0119za \u017c\u00f3\u0142\u0107"},
+		{"DOS858", 16, "precio 10\u20ac"},
+		{"DOS860", 13, "cora\u00e7\u00e3o"},
+		{"DOS862", 17, "\u05e9\u05dc\u05d5\u05dd"},
+		{"DOS863", 14, "Caf\u00e9 \u00eatre"},
+		{"DOS865", 12, "K\u00f8benhavn \u00e6\u00f8"},
+		{"DOS866", 48, "\u041f\u0440\u0438\u0432\u0435\u0442"},
+		{"TIS620", 66, "\u0e2a\u0e27\u0e31\u0e2a\u0e14\u0e35"},
 	}
 
 	for _, tt := range tests {
@@ -189,9 +200,14 @@ func TestUnsupportedLegacyCharsetsPassThrough(t *testing.T) {
 		id   int32
 	}{
 		{"DOS737", 9},
-		{"DOS437", 10},
-		{"DOS850", 11},
-		{"TIS620", 66},
+		{"DOS775", 15},
+		{"DOS864", 18},
+		{"DOS857", 46},
+		{"DOS861", 47},
+		{"DOS869", 49},
+		{"NEXT", 19},
+		{"CYRL", 50},
+		{"CP943C", 68},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

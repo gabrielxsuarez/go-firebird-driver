@@ -182,6 +182,20 @@ func encodingForID(id int32) encoding.Encoding {
 		return japanese.ShiftJIS
 	case 6: // EUCJ_0208
 		return japanese.EUCJP
+	case 10: // DOS437
+		return charmap.CodePage437
+	case 11: // DOS850
+		return charmap.CodePage850
+	case 12: // DOS865
+		return charmap.CodePage865
+	case 13: // DOS860
+		return charmap.CodePage860
+	case 14: // DOS863
+		return charmap.CodePage863
+	case 16: // DOS858
+		return charmap.CodePage858
+	case 17: // DOS862
+		return charmap.CodePage862
 	case 22: // ISO8859_2
 		return charmap.ISO8859_2
 	case 23: // ISO8859_3
@@ -202,6 +216,10 @@ func encodingForID(id int32) encoding.Encoding {
 		return charmap.ISO8859_13
 	case 44: // KSC_5601
 		return korean.EUCKR
+	case 45: // DOS852
+		return charmap.CodePage852
+	case 48: // DOS866
+		return charmap.CodePage866
 	case 51: // WIN1250
 		return charmap.Windows1250
 	case 52: // WIN1251
@@ -214,8 +232,8 @@ func encodingForID(id int32) encoding.Encoding {
 		return charmap.Windows1254
 	case 56: // BIG_5
 		return traditionalchinese.Big5
-	case 57: // GB_2312
-		return simplifiedchinese.HZGB2312
+	case 57: // GB_2312 — Firebird almacena EUC-CN; GBK es su superconjunto en x/text
+		return simplifiedchinese.GBK
 	case 58: // WIN1255
 		return charmap.Windows1255
 	case 59: // WIN1256
@@ -228,6 +246,8 @@ func encodingForID(id int32) encoding.Encoding {
 		return charmap.KOI8U
 	case 65: // WIN1258
 		return charmap.Windows1258
+	case 66: // TIS620 — Windows-874 es su superconjunto en x/text (ISO8859-11 + extras)
+		return charmap.Windows874
 	case 67: // GBK
 		return simplifiedchinese.GBK
 	case 69: // GB18030
