@@ -248,7 +248,20 @@ func (c *conn) materializeBlobRowsLocked(txHandle int32, outputs []wire.ColumnDe
 				}
 			}
 			if col.SubType == 1 {
-				row[ci] = fbcharset.Decode(fbcharset.CharsetID(c.config.Charset), data) // text blob
+				// Text blob: decodificar con el charset efectivo que reporta el
+				// describe (col.Scale), no con el de conexión — con charset=NONE
+				// el server manda los bytes almacenados crudos en el charset
+				// declarado de la columna (D3b). Si resuelve a NONE (blob NONE +
+				// none_charset=NONE), bytes crudos como CHAR/VARCHAR NONE (D1).
+				if csid := c.blobTextCharset(&col); csid == fbcharset.IDNone {
+					if data == nil {
+						row[ci] = []byte{}
+					} else {
+						row[ci] = data
+					}
+				} else {
+					row[ci] = fbcharset.Decode(csid, data)
+				}
 			} else if data == nil {
 				row[ci] = []byte{} // binary blob vacío
 			} else {

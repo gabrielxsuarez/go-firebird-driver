@@ -84,9 +84,13 @@ raw: it is binary by declaration, not text without a character set.
 `ColumnTypeLength` reports the length declared in the database (`NONE` is one
 byte per character), independent of `none_charset`.
 
-Known limitation:
-
-- `BLOB SUB_TYPE TEXT` parameters are encoded with the connection charset. This matches the practical behavior used by the current implementation, but it is not a per-column charset-aware BPB implementation.
+Text blobs follow the same rules: the describe reports the blob's effective
+character set (the connection charset when the server transliterates, or the
+declared column charset under `charset=NONE`), and the driver decodes reads
+and encodes string parameters with it. A `BLOB SUB_TYPE TEXT CHARACTER SET
+NONE` follows `none_charset`, like `CHAR`/`VARCHAR NONE` — including raw
+`[]byte` when it resolves to `NONE`. `[]byte` parameters are always written
+as-is.
 
 ## Errors
 
@@ -125,7 +129,7 @@ Known limitation:
 | `CHAR/VARCHAR CHARACTER SET OCTETS` | Returned as `[]byte`. |
 | `CHAR/VARCHAR CHARACTER SET NONE` | Returned as string decoded with `none_charset` (defaults to the connection charset), or as `[]byte` when that resolves to `NONE`. |
 | `BLOB SUB_TYPE 0` | Materialized as `[]byte`. |
-| `BLOB SUB_TYPE TEXT` | Materialized as string using connection charset. |
+| `BLOB SUB_TYPE TEXT` | Materialized as string decoded with the blob's effective charset as reported by the describe (connection charset when the server transliterates; declared column charset under `charset=NONE`). `CHARACTER SET NONE` text blobs follow `none_charset`, returning `[]byte` when it resolves to `NONE`. |
 
 Known limitation:
 

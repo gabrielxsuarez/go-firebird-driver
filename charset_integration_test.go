@@ -644,3 +644,173 @@ func TestCollatedCharsetRoundTrip(t *testing.T) {
 		}
 	})
 }
+
+// sqlOpenTestDBWithQuery abre la base de test con un query string completo
+// (para DSNs con más de un parámetro, p.ej. charset=NONE&none_charset=...).
+func sqlOpenTestDBWithQuery(query string) (*sql.DB, error) {
+	dsn := testDSN
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	db, err := sql.Open("firebird", dsn+sep+query)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+// TestBlobTextCharsetRoundTrip cubre D3b: los blobs de texto se decodificaban
+// y encodeaban con el charset de CONEXIÓN. El describe reporta el charset
+// efectivo del blob en sqlscale (desc.Scale) y coincide siempre con los bytes
+// que viajan: transliterados a lc_ctype si la conexión tiene charset, o
+// crudos en el charset declarado de la columna con charset=NONE. Con
+// charset=NONE un blob ISO8859_1 llegaba como string UTF-8 inválido y un
+// parámetro string se escribía como UTF-8 crudo en la base.
+//
+// Scale=0 (blob CHARACTER SET NONE real, sin transliteración posible) sigue
+// la reinterpretación none_charset, como CHAR/VARCHAR NONE.
+func TestBlobTextCharsetRoundTrip(t *testing.T) {
+	admin := openTestDB(t) // UTF8 default
+	admin.Exec("DROP TABLE TEST_BLOB_CS")
+	_, err := admin.Exec(`
+		CREATE TABLE TEST_BLOB_CS (
+			ID INTEGER NOT NULL PRIMARY KEY,
+			B_ISO BLOB SUB_TYPE TEXT CHARACTER SET ISO8859_1,
+			B_UTF BLOB SUB_TYPE TEXT CHARACTER SET UTF8,
+			B_NONE BLOB SUB_TYPE TEXT CHARACTER SET NONE
+		)`)
+	if err != nil {
+		t.Fatalf("CREATE: %v", err)
+	}
+	t.Cleanup(func() { admin.Exec("DROP TABLE TEST_BLOB_CS") })
+
+	const want = "Ñandú ácido"
+	rawISO := []byte("\xd1and\xfa \xe1cido") // 11 bytes en Latin-1
+	const lenISO, lenUTF = 11, 14            // "Ñandú ácido" en Latin-1 / UTF-8
+
+	// Escritura: el parámetro string se encodea al charset efectivo del blob,
+	// venga la conexión que venga. Testigo: OCTET_LENGTH en el server.
+	for _, cs := range []string{"UTF8", "ISO8859_1", "NONE"} {
+		t.Run("escritura via conexion "+cs, func(t *testing.T) {
+			db, err := sqlOpenTestDBWithQuery("charset=" + cs)
+			if err != nil {
+				t.Fatalf("open %s: %v", cs, err)
+			}
+			defer db.Close()
+
+			if _, err := db.Exec("DELETE FROM TEST_BLOB_CS"); err != nil {
+				t.Fatalf("DELETE: %v", err)
+			}
+			if _, err := db.Exec("INSERT INTO TEST_BLOB_CS (ID, B_ISO, B_UTF) VALUES (1, ?, ?)", want, want); err != nil {
+				t.Fatalf("INSERT: %v", err)
+			}
+
+			var gotISO, gotUTF int
+			if err := admin.QueryRow("SELECT OCTET_LENGTH(B_ISO), OCTET_LENGTH(B_UTF) FROM TEST_BLOB_CS WHERE ID=1").Scan(&gotISO, &gotUTF); err != nil {
+				t.Fatalf("OCTET_LENGTH: %v", err)
+			}
+			if gotISO != lenISO || gotUTF != lenUTF {
+				t.Fatalf("bytes en base: B_ISO=%d B_UTF=%d, want %d y %d (el parámetro no se encodeó al charset del blob)", gotISO, gotUTF, lenISO, lenUTF)
+			}
+
+			var rtISO, rtUTF string
+			if err := admin.QueryRow("SELECT B_ISO, B_UTF FROM TEST_BLOB_CS WHERE ID=1").Scan(&rtISO, &rtUTF); err != nil {
+				t.Fatalf("SELECT: %v", err)
+			}
+			if rtISO != want || rtUTF != want {
+				t.Fatalf("round-trip: B_ISO=%q B_UTF=%q, want %q", rtISO, rtUTF, want)
+			}
+		})
+	}
+
+	// Lectura: fila canónica escrita vía UTF8; cada conexión tiene que
+	// devolver el mismo string. Con charset=NONE los bytes llegan crudos
+	// (Latin-1 y UTF-8 respectivamente) y el decode debe ir por columna.
+	if _, err := admin.Exec("DELETE FROM TEST_BLOB_CS"); err != nil {
+		t.Fatalf("DELETE: %v", err)
+	}
+	if _, err := admin.Exec("INSERT INTO TEST_BLOB_CS (ID, B_ISO, B_UTF) VALUES (1, ?, ?)", want, want); err != nil {
+		t.Fatalf("INSERT canónico: %v", err)
+	}
+
+	for _, cs := range []string{"UTF8", "ISO8859_1", "NONE"} {
+		t.Run("lectura via conexion "+cs, func(t *testing.T) {
+			db, err := sqlOpenTestDBWithQuery("charset=" + cs)
+			if err != nil {
+				t.Fatalf("open %s: %v", cs, err)
+			}
+			defer db.Close()
+
+			var gotISO, gotUTF string
+			if err := db.QueryRow("SELECT B_ISO, B_UTF FROM TEST_BLOB_CS WHERE ID=1").Scan(&gotISO, &gotUTF); err != nil {
+				t.Fatalf("SELECT: %v", err)
+			}
+			if !utf8.ValidString(gotISO) {
+				t.Fatalf("B_ISO no es UTF-8 válido: % x", gotISO)
+			}
+			if gotISO != want || gotUTF != want {
+				t.Fatalf("B_ISO=%q B_UTF=%q, want %q", gotISO, gotUTF, want)
+			}
+		})
+	}
+
+	t.Run("blob NONE con none_charset", func(t *testing.T) {
+		db, err := sqlOpenTestDBWithQuery("charset=NONE&none_charset=ISO8859_1")
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		defer db.Close()
+
+		if _, err := db.Exec("INSERT INTO TEST_BLOB_CS (ID, B_NONE) VALUES (2, ?)", want); err != nil {
+			t.Fatalf("INSERT: %v", err)
+		}
+
+		// El parámetro se encodeó con none_charset (Latin-1 crudo en la base).
+		var n int
+		if err := admin.QueryRow("SELECT OCTET_LENGTH(B_NONE) FROM TEST_BLOB_CS WHERE ID=2").Scan(&n); err != nil {
+			t.Fatalf("OCTET_LENGTH: %v", err)
+		}
+		if n != lenISO {
+			t.Fatalf("bytes en base = %d, want %d (Latin-1)", n, lenISO)
+		}
+
+		// La lectura reinterpreta con none_charset.
+		var got string
+		if err := db.QueryRow("SELECT B_NONE FROM TEST_BLOB_CS WHERE ID=2").Scan(&got); err != nil {
+			t.Fatalf("SELECT: %v", err)
+		}
+		if got != want {
+			t.Fatalf("B_NONE = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("blob NONE sin none_charset: bytes crudos", func(t *testing.T) {
+		// none_charset resuelve a NONE: sin charset con qué interpretarlo,
+		// el blob de texto se entrega como []byte (mismo trato que las
+		// columnas CHAR/VARCHAR NONE — D1).
+		db, err := sqlOpenTestDBWithQuery("charset=NONE")
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		defer db.Close()
+
+		var got any
+		if err := db.QueryRow("SELECT B_NONE FROM TEST_BLOB_CS WHERE ID=2").Scan(&got); err != nil {
+			t.Fatalf("SELECT: %v", err)
+		}
+		bs, ok := got.([]byte)
+		if !ok {
+			t.Fatalf("B_NONE = %T, want []byte", got)
+		}
+		if !bytes.Equal(bs, rawISO) {
+			t.Fatalf("B_NONE = % x, want % x", bs, rawISO)
+		}
+	})
+}

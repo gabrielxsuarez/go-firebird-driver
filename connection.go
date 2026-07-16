@@ -649,6 +649,24 @@ func (c *conn) CheckNamedValue(nv *driver.NamedValue) error {
 
 // --- Helpers ---
 
+// blobTextCharset devuelve el charset efectivo de un blob de texto. El
+// describe lo reporta en sqlscale (desc.Scale, convención XSQLDA para BLOBs)
+// y coincide siempre con los bytes que viajan: transliterados a lc_ctype si
+// la conexión tiene charset, o crudos en el charset declarado de la columna
+// con charset=NONE. Scale=0 es un blob NONE real (el servidor nunca lo
+// translitera): se aplica la misma reinterpretación none_charset que
+// applyNoneCharset hace para CHAR/VARCHAR.
+func (c *conn) blobTextCharset(col *wire.ColumnDescriptor) int32 {
+	if col.Scale != 0 {
+		return col.Scale
+	}
+	nc := c.config.NoneCharset
+	if nc == "" {
+		nc = c.config.Charset
+	}
+	return fbcharset.CharsetID(nc)
+}
+
 func (c *conn) materializeNamedBlobs(txHandle int32, cols []wire.ColumnDescriptor, values []driver.NamedValue) error {
 	for i, col := range cols {
 		if col.SQLType&^int32(1) != wire.SQLBlob || i >= len(values) || values[i].Value == nil {
@@ -660,7 +678,7 @@ func (c *conn) materializeNamedBlobs(txHandle int32, cols []wire.ColumnDescripto
 			blobData = v
 		case string:
 			if col.SubType == 1 {
-				s, err := fbcharset.Encode(fbcharset.CharsetID(c.config.Charset), v)
+				s, err := fbcharset.Encode(c.blobTextCharset(&col), v)
 				if err != nil {
 					return fmt.Errorf("encode text blob param %d: %w", i, err)
 				}
