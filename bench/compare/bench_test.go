@@ -1,6 +1,6 @@
 package compare
 
-// Harness head-to-head go-firebird-driver vs nakagami/firebirdsql (Fase 3.2/6.3).
+// Harness head-to-head go-firebird-driver vs nakagami/firebirdsql.
 //
 // Ambos drivers registran el nombre "firebirdsql" en database/sql, así que no
 // pueden convivir en un proceso: la variante se elige con build tags.

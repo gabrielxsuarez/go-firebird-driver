@@ -126,11 +126,9 @@ Main parameters:
 
 ### `none_charset`
 
-Text columns declared `CHARACTER SET NONE` carry no character set, so the bytes
-alone do not say how to read them. `none_charset` is the character set used to
-decode those columns and to encode parameters bound to them. It defaults to
-`charset`, which matches nakagami's driver; Jaybird does the same by redefining
-the `NONE` encoding to the connection's charset.
+Text columns declared `CHARACTER SET NONE` carry no character set.
+`none_charset` is how the driver decodes them (and encodes parameters bound to
+them). It defaults to `charset`.
 
 Reading a `NONE` column that holds `0xD1` (`Ñ` in Latin-1):
 
@@ -138,25 +136,11 @@ Reading a `NONE` column that holds `0xD1` (`Ñ` in Latin-1):
 ?charset=UTF8                          → "\xD1"      (string, not valid UTF-8)
 ?charset=ISO8859_1                     → "Ñ"
 ?charset=NONE                          → []byte{0xD1}
-?charset=NONE&none_charset=ISO8859_1   → "Ñ"
+?charset=NONE&none_charset=ISO8859_1   → "Ñ"   (recommended for mixed legacy DBs)
 ```
 
-Decoding as `UTF8` is a pass-through, so the first form hands back the bytes
-unchanged inside a `string`, which is not valid UTF-8 and degrades to `U+FFFD`
-if the consumer iterates runes. Point `none_charset` at the character set the
-data is really in to get a well-formed string.
-
-The last form is the Jaybird-style passthrough recommended for legacy databases
-with mixed character sets: `charset=NONE` keeps the server from transliterating
-(a lossy connection charset aborts the fetch with *Malformed string* on data it
-cannot represent), while `none_charset` decodes the `NONE` columns client-side.
-Columns that declare their own character set are unaffected, and `OCTETS` stays
-raw: it is binary by declaration, not text without a character set.
-
-Setting `none_charset=NONE` always yields raw `[]byte`, whatever the connection
-charset is.
-
-See [COMPATIBILITY.md](COMPATIBILITY.md) for the current compatibility contract, type behavior, charset behavior, and known limitations.
+Full charset rules, type behavior, and known limitations:
+[COMPATIBILITY.md](COMPATIBILITY.md).
 
 ## Usage Notes
 
@@ -175,10 +159,9 @@ The four things most likely to surprise you:
   A 100 MB blob means 100 MB of memory; there is no streaming API in 1.0.
 - **`TIMESTAMP`/`TIME WITH TIME ZONE`** come back as `time.Time` preserving wall clock
   and offset; the original IANA zone *name* is not guaranteed to survive.
-- **`CHARACTER SET NONE`** columns carry no character set, so they are decoded with
-  `none_charset`, which defaults to the connection charset. Point it at the character
-  set the data is really in (`?none_charset=ISO8859_1`), or set it to `NONE` to get raw
-  `[]byte`. See [`none_charset`](#none_charset) above.
+- **`CHARACTER SET NONE`** columns are decoded with `none_charset` (defaults to the
+  connection charset). Use `?none_charset=ISO8859_1` for Latin-1 legacy data, or
+  `NONE` for raw `[]byte`. See [`none_charset`](#none_charset).
 - **No `LastInsertId`**: Firebird has no such concept; use `INSERT ... RETURNING`:
 
   ```go

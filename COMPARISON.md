@@ -4,7 +4,7 @@ Comparación verificada y reproducible entre este driver y
 [nakagami/firebirdsql](https://github.com/nakagami/firebirdsql) (el driver Firebird
 de facto en Go). Versiones exactas de esta comparación:
 
-- go-firebird-driver: rama `review/pre-1.0` (pre-1.0, 2026-07-03)
+- go-firebird-driver: pre-1.0 (2026-07-03)
 - nakagami/firebirdsql: **v0.9.19** (última release publicada al momento de medir)
 - Go 1.26.x, Windows/amd64, Firebird 3.0.14 nativo en loopback
 - Corrección verificada además contra Firebird 3/4/5 en contenedores
@@ -41,7 +41,7 @@ Verificada leyendo/ejercitando el código de ambos (no de memoria). ✅ = soport
 | Services API (backup/restore/maintenance) | ❌ fuera de alcance 1.0 | ✅ |
 | Tabla de mensajes de error embebida | ✅ (2969 templates) | ✅ |
 
-Fuera de alcance 1.0 con justificación (`COMPATIBILITY.md`): events, services, compresión
+Fuera de alcance 1.0 con justificación ([COMPATIBILITY.md](COMPATIBILITY.md)): events, services, compresión
 wire, `Legacy_Auth`, scrollable cursors, arrays. Si tu aplicación depende de events o de
 la services API, nakagami es hoy la opción para esas partes.
 
@@ -74,7 +74,7 @@ mismo servidor, mismos datos, `benchstat` con n=6 (p=0.002 salvo indicado).
 | Pool 20 goroutines | 87 µs · 11 allocs | 79 µs · 95 allocs | **nakagami 1.10× más rápido** | **8.6× menos** |
 
 Resumen honesto: **más rápidos en 5 de 7 escenarios, empate en Connect, y nakagami gana
-Pool20 por ~10%** (verificado con corridas intercaladas; está en nuestro backlog).
+Pool20 por ~10%** (verificado con corridas intercaladas; está en el backlog post-1.0).
 En memoria: **menos allocations en los 7 escenarios** (geomean 12.7×) y menos bytes en
 6 de 7. Menos allocations = menos presión de GC bajo carga sostenida.
 
@@ -83,8 +83,8 @@ En memoria: **menos allocations en los 7 escenarios** (geomean 12.7×) y menos b
 ![Allocations por operación](assets/comparison-allocs.svg)
 
 Nota de transparencia: nakagami mejoró notablemente de v0.9.15 a v0.9.19 (p.ej.
-`SELECT 1` de 802µs a 368µs). Esta tabla usa la última release; los números viejos de
-v0.9.15 quedan solo en los informes internos de `review/`.
+`SELECT 1` de 802µs a 368µs). Esta tabla usa la última release medida; re-medir
+contra su última versión antes del anuncio de 1.0.
 
 ## Reproducir
 
@@ -95,8 +95,7 @@ go test -run '^$' -bench . -benchmem -count=6 -tags nak . > nak.txt
 benchstat ours.txt nak.txt
 ```
 
-Requiere una base dedicada (ver `bench/compare/README.md`). La comparación de corrección
-sobre bases reales usa el barrido documentado en `review/03-phase2-completion.md`.
+Requiere una base dedicada (ver `bench/compare/README.md`).
 
 ## Migración
 

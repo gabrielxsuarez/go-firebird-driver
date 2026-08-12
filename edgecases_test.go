@@ -1,7 +1,7 @@
 package firebird
 
-// Edge cases dirigidos de la Fase 2.3 de la revisión pre-1.0, más los tests
-// de los fixes H11-H19 (review/01b-database-sql-audit.md).
+// Edge cases dirigidos de la revisión pre-1.0 (valores límite, errores de servidor,
+// post-EOF/Close, concurrencia/pool, y fixes de contrato database/sql).
 
 import (
 	"context"

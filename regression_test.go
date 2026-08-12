@@ -1,6 +1,6 @@
 package firebird
 
-// Tests de regresión de la revisión pre-1.0 (review/01a, 01b).
+// Tests de regresión de la revisión pre-1.0.
 // Cada test reproduce un bug confirmado contra un servidor real.
 
 import (

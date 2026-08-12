@@ -1,7 +1,7 @@
 package firebird
 
-// Fase 2.2: matriz multi-versión — verificación de la versión de protocolo
-// negociada y de las variantes de wire_crypt contra cada servidor disponible.
+// Matriz multi-versión: protocolo negociado y variantes de wire_crypt
+// contra cada servidor Firebird disponible (3/4/5).
 
 import (
 	"context"

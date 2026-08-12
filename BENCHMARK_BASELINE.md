@@ -3,9 +3,12 @@
 Baseline runs are local and environment-sensitive. Use them to catch large allocation or
 latency regressions, not as universal performance promises.
 
+For the head-to-head comparison against nakagami/firebirdsql see [COMPARISON.md](COMPARISON.md)
+and reproduce with [`bench/compare/`](bench/compare/README.md).
+
 ## Environment
 
-- Date: 2026-07-03 (review pre-1.0, Fase 3)
+- Date: 2026-07-03
 - OS: Windows/amd64
 - Go: `go1.26.x windows/amd64`
 - CPU: Intel Core i5-10210U (laptop)
@@ -21,14 +24,13 @@ thermal state.
 ## Commands
 
 ```powershell
-go test -run '^$' -bench . -benchmem -count=10 ./wire > review/bench/micro_wire.txt
-go test -run '^$' -bench . -benchmem -count=10 ./internal/charset > review/bench/micro_charset.txt
+go test -run '^$' -bench . -benchmem -count=10 ./internal/wire
+go test -run '^$' -bench . -benchmem -count=10 ./internal/charset
 $env:FB3_TEST_DSN='firebird://sysdba:masterkey@127.0.0.1:3050/C:/AlfaBeta/firebird/tmp/bench.fdb'
 go test -run '^$' -bench "^Benchmark(Ping|QuerySingleRow|ExecInsert|PreparedExec|QueryManyRows)$" -benchmem -count=6 .
 ```
 
-Summarize with `benchstat` (raw outputs of this baseline live in `review/bench/`).
-For the head-to-head comparison against nakagami/firebirdsql see `bench/compare/README.md`.
+Summarize with `benchstat` when comparing two runs.
 
 ## Regression Rules
 
@@ -81,23 +83,3 @@ BenchmarkQueryManyRows-8    7.33 ms/op    111.7 KiB/op  7627 allocs/op
 
 Allocation counts are identical to (or slightly better than) the 2026-05-08 baseline;
 that baseline's `ns/op` was measured cold and is superseded by this one.
-
-### Head-to-head vs nakagami/firebirdsql v0.9.19 (2026-07-03, benchstat n=6)
-
-Same server, same data, per-driver defaults. Full report: `COMPARISON.md` and
-`review/06-vs-nakagami.md`; reproduce with `bench/compare/`.
-
-```text
-                    ours       nakagami    time delta          allocs (ours vs nak)
-Connect             63.8 ms    66.5 ms     tie (p=0.18)        211 vs 3089
-Select1Prepared      254 µs     368 µs     +45%                 12 vs 62
-Fetch10kx10        107.1 ms   128.4 ms     +20%               130k vs 500k
-InsertPrepared       232 µs     268 µs     +15%                  8 vs 62
-Blob1KB              557 µs     704 µs     +26%                 17 vs 127
-Blob1MB             25.5 ms   118.1 ms     +363%                36 vs 13487
-Pool20                87 µs      79 µs     nakagami +10%        11 vs 95
-```
-
-Pool20 is the one scenario nakagami wins (verified with interleaved runs); it is a
-backlog item (`review/06-vs-nakagami.md`). nakagami improved considerably between
-v0.9.15 and v0.9.19 — re-measure against their latest release before the 1.0 announce.

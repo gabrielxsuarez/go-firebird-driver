@@ -152,13 +152,12 @@ $env:FB3_TEST_DSN='firebird://sysdba:masterkey@127.0.0.1:3050/path/to/test-datab
 
 With Firebird 4/5 containers available, the normal test suite also validates the FB4/FB5 type and metadata coverage.
 
-## Resolved Contract Decisions (2026-07-03, pre-1.0 review)
+## Resolved Contract Decisions
 
 These are the 1.0 contract; all four leave room for additive 1.x extensions:
 
 - **BLOBs are fully materialized** (`[]byte`/`string`). Memory cost validated up to
-  hundreds of MB in phase-2 testing. A streaming API can be added in 1.x without breaking
-  this contract.
+  hundreds of MB. A streaming API can be added in 1.x without breaking this contract.
 - **High-precision numerics are `string`** (lossless). Third-party decimal types work as
   parameters today via `driver.Valuer`. Optional helper types may come in 1.x.
 - **Time zone values preserve wall clock and offset**; the original IANA zone name is not
